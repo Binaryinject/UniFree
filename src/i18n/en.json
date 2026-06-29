@@ -1,0 +1,84 @@
+{
+  "app": {
+    "title": "UniFree",
+    "admin_required": "Administrator privileges required",
+    "admin_hint": "Please run as administrator",
+    "run_as_admin": "Run as admin"
+  },
+  "tabs": {
+    "hub": "Unity Hub",
+    "editor": "Unity Editor",
+    "about": "About"
+  },
+  "hub": {
+    "title": "Unity Hub Patch",
+    "desc": "Hub config patch + license file checks",
+    "patch": "Patch Hub",
+    "restore": "Restore Hub",
+    "patching": "Patching...",
+    "restoring": "Restoring...",
+    "patch_success": "Hub patched successfully",
+    "restore_success": "Hub restored successfully",
+    "disable_signin": "Bypass Sign-in",
+    "disable_signin_desc": "Skip Unity Hub mandatory sign-in requirement",
+    "disable_update": "Block Updates",
+    "disable_update_desc": "Disable Unity Hub auto-update check",
+    "cert_patch": "Licensing Client",
+    "cert_patch_desc": "Replace System.Security.Cryptography.Xml.dll to bypass signature verification",
+    "config_patch": "Hub Config",
+    "config_patch_desc": "Patch app.asar sign-in and update settings",
+    "license": "License File",
+    "license_desc": "Copy Unity_lic.ulf to system directory",
+    "license_missing_signature": "Unity_lic.ulf is missing the Signature node. Unity Licensing Client logs this as Missing Signature node and processes 0 license files.",
+    "unihacker_method_title": "UniHacker True Method",
+    "unihacker_method_step1": "Replace System.Security.Cryptography.Xml.dll (160KB cracked version)",
+    "unihacker_method_step2": "Bypass XML signature verification",
+    "unihacker_method_step3": "No PEM certificate or IL code modification needed"
+  },
+  "editor": {
+    "title": "Unity Editor Management",
+    "desc": "Auto-detect installed Unity versions, patch/restore individually or in batch",
+    "patch_all": "Patch All",
+    "restore_all": "Restore All",
+    "patch": "Patch",
+    "restore": "Restore",
+    "no_editors": "No installed Unity Editor detected",
+    "download": "Download Unity Editor Archive",
+    "hub_first": "Please patch Unity Hub in the Hub tab first"
+  },
+  "status": {
+    "patched": "Patched",
+    "authorized": "Authorized",
+    "original": "Original",
+    "unauthorized": "Unauthorized",
+    "not_found": "Not found",
+    "unknown": "Unknown",
+    "mismatch": "Different file",
+    "missing_signature": "Missing Signature",
+    "patched_no_backup": "Patched (no backup)",
+    "partial": "Partial"
+  },
+  "log": {
+    "title": "Logs",
+    "clear": "Clear",
+    "empty": "No logs yet",
+    "hub_running": "Unity Hub is running, force closing...",
+    "editor_running": "Unity Editor is running, force closing...",
+    "hub_launched": "Unity Hub launched",
+    "hub_launch_failed": "Failed to launch Unity Hub",
+    "license_copied": "License file checked",
+    "license_preserved": "Existing signed license file preserved",
+    "license_skipped_missing_signature": "Skipped bundled Unity_lic.ulf: it is missing the Signature node and would be processed as 0 licenses by Licensing Client.",
+    "license_copy_failed": "Failed to write license file",
+    "scan_failed": "Scan failed",
+    "admin_required": "Administrator privileges required",
+    "admin_relaunch_started": "Administrator relaunch requested",
+    "admin_relaunch_failed": "Failed to relaunch as administrator"
+  },
+  "about": {
+    "version": "Version",
+    "author": "Author",
+    "description": "Unity License Patcher",
+    "github": "GitHub"
+  }
+}

@@ -1,0 +1,12 @@
+     Running BeforeDevCommand (`npm run dev`)
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+        Info Watching D:\GIT\UniFree\src-tauri for changes...
+[1m[92m    Finished[0m ]8;;https://doc.rust-lang.org/cargo/reference/profiles.html#default-profiles\`dev` profile [unoptimized + debuginfo]]8;;\ target(s) in 0.42s
+[1m[92m     Running[0m `target\debug\unifree.exe`
+[31merror when starting dev server:
+Error: Port 1420 is already in use
+    at Server.onError (file:///D:/GIT/UniFree/node_modules/vite/dist/node/chunks/dep-Dm0c1Wj2.js:25119:18)
+    at Server.emit (node:events:508:28)
+    at emitErrorNT (node:net:1976:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21)[39m
+       Error The "beforeDevCommand" terminated with a non-zero status code.

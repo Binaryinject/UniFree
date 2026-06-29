@@ -1,0 +1,11 @@
+﻿[package]
+name = "patch-test"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "test"
+path = "main.rs"
+
+[dependencies]
+unifree = { path = ".." }

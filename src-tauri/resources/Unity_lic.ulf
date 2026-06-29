@@ -1,0 +1,70 @@
+<root>
+  <License id="Terms">
+    <MachineBindings>
+      <Binding Key="1" Value="00328-90000-00000-AAOEM"/>
+      <Binding Key="2" Value="00000_00_000000_00_1000A7_25_4B456B_65.2"/>
+      <Binding Key="4" Value="RFpfVTlSM045NDkz"/>
+      <Binding Key="5" Value="b0:41:6f:13:fe:76"/>
+    </MachineBindings>
+    <MachineID Value="5LduG3msC5HiV8jKZg2HGVycmkY="/>
+    <SerialHash Value="b7ba57d463155fb1232555425abce21e9e000a77"/>
+    <Features>
+      <Feature Value="0"/>
+      <Feature Value="1"/>
+      <Feature Value="2"/>
+      <Feature Value="3"/>
+      <Feature Value="4"/>
+      <Feature Value="5"/>
+      <Feature Value="6"/>
+      <Feature Value="9"/>
+      <Feature Value="10"/>
+      <Feature Value="11"/>
+      <Feature Value="12"/>
+      <Feature Value="13"/>
+      <Feature Value="14"/>
+      <Feature Value="15"/>
+      <Feature Value="17"/>
+      <Feature Value="18"/>
+      <Feature Value="19"/>
+      <Feature Value="20"/>
+      <Feature Value="21"/>
+      <Feature Value="23"/>
+      <Feature Value="24"/>
+      <Feature Value="25"/>
+      <Feature Value="26"/>
+      <Feature Value="28"/>
+      <Feature Value="29"/>
+      <Feature Value="30"/>
+      <Feature Value="31"/>
+      <Feature Value="32"/>
+      <Feature Value="33"/>
+      <Feature Value="34"/>
+      <Feature Value="35"/>
+      <Feature Value="36"/>
+      <Feature Value="39"/>
+      <Feature Value="40"/>
+    </Features>
+    <DeveloperData Value="AQAAAEY0LUE4UDAtVVdITC1CT0tXLVdHRlEtVkY4TA=="/>
+    <SerialMasked Value="F4-A8P0-UWHL-BOKW-WGFQ-XXXX"/>
+    <StartDate Value="2026-06-26T03:52:27"/>
+    <UpdateDate Value="2096-06-26T03:52:27"/>
+    <InitialActivationDate Value="2026-06-25T03:52:27"/>
+    <LicenseVersion Value="6.x"/>
+    <ClientProvidedVersion Value="2017.2.0"/>
+    <AlwaysOnline Value="false"/>
+  </License>
+  <Signature xmlns="http://www.w3.org/2000/09/xmldsig#">
+    <SignedInfo>
+      <CanonicalizationMethod Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"/>
+      <SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"/>
+      <Reference URI="#Terms">
+        <Transforms>
+          <Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/>
+        </Transforms>
+        <DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/>
+        <DigestValue>bcw/Mm+YxIRQS9wwHKE8+9cFQXw=</DigestValue>
+      </Reference>
+    </SignedInfo>
+    <SignatureValue>He8Xi9hsw+jL/MNE1YfBH4XN13ZaWZ2mJ7fsFpY4dY/1nDq5w62o0WpZGKzcZMICy/zMQOIm8DZYSTBgsjCygg25wv6XPFK+hZAO95fDscuUTKBc80rm7kQrVYqfiBGF0p33p/tf4eUa0Y0gyCRrQDHq0O0Yad9mWFNZz2fy+9w=</SignatureValue>
+  </Signature>
+</root>

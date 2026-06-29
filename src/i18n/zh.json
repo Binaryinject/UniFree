@@ -1,0 +1,84 @@
+{
+  "app": {
+    "title": "UniFree",
+    "admin_required": "需要管理员权限运行",
+    "admin_hint": "请以管理员身份运行 UniFree",
+    "run_as_admin": "管理员运行"
+  },
+  "tabs": {
+    "hub": "Unity Hub",
+    "editor": "Unity Editor",
+    "about": "关于"
+  },
+  "hub": {
+    "title": "Unity Hub 补丁",
+    "desc": "Hub 配置补丁 + 授权文件检查",
+    "patch": "补丁 Hub",
+    "restore": "还原 Hub",
+    "patching": "正在补丁...",
+    "restoring": "正在还原...",
+    "patch_success": "Hub 补丁完成",
+    "restore_success": "Hub 还原完成",
+    "disable_signin": "免登录",
+    "disable_signin_desc": "跳过 Unity Hub 强制登录要求",
+    "disable_update": "屏蔽升级",
+    "disable_update_desc": "禁止 Unity Hub 自动检查更新",
+    "cert_patch": "授权客户端",
+    "cert_patch_desc": "替换 System.Security.Cryptography.Xml.dll 绕过签名验证",
+    "config_patch": "Hub 配置",
+    "config_patch_desc": "补丁 app.asar 的登录与更新配置",
+    "license": "授权文件",
+    "license_desc": "拷贝 Unity_lic.ulf 到系统目录",
+    "license_missing_signature": "Unity_lic.ulf 缺少 Signature 节点。Unity Licensing Client 会记录 Missing Signature node，并处理为 0 个授权文件。",
+    "unihacker_method_title": "UniHacker 真正方法",
+    "unihacker_method_step1": "替换 System.Security.Cryptography.Xml.dll（160KB 破解版）",
+    "unihacker_method_step2": "绕过 XML 签名验证",
+    "unihacker_method_step3": "无需修改 PEM 证书或 IL 代码"
+  },
+  "editor": {
+    "title": "Unity Editor 管理",
+    "desc": "自动检测已安装的 Unity 版本，逐个或批量补丁/还原",
+    "patch_all": "补丁全部",
+    "restore_all": "还原全部",
+    "patch": "补丁",
+    "restore": "还原",
+    "no_editors": "未检测到已安装的 Unity Editor",
+    "download": "下载 Unity Editor 历史版本",
+    "hub_first": "请先在 Hub 选项卡补丁 Unity Hub"
+  },
+  "status": {
+    "patched": "已补丁",
+    "authorized": "已授权",
+    "original": "未补丁",
+    "unauthorized": "未授权",
+    "not_found": "未找到",
+    "unknown": "未知",
+    "mismatch": "文件不同",
+    "missing_signature": "缺少签名",
+    "patched_no_backup": "已补丁，无备份",
+    "partial": "部分完成"
+  },
+  "log": {
+    "title": "日志",
+    "clear": "清空",
+    "empty": "暂无日志",
+    "hub_running": "Unity Hub 正在运行，强制关闭...",
+    "editor_running": "Unity Editor 正在运行，强制关闭...",
+    "hub_launched": "Unity Hub 已启动",
+    "hub_launch_failed": "Unity Hub 启动失败",
+    "license_copied": "授权文件已检查",
+    "license_preserved": "已保留现有带签名授权文件",
+    "license_skipped_missing_signature": "已跳过内置 Unity_lic.ulf：文件缺少 Signature 节点，写入后会被 Licensing Client 解析为 0 个授权。",
+    "license_copy_failed": "授权文件写入失败",
+    "scan_failed": "扫描失败",
+    "admin_required": "需要管理员权限",
+    "admin_relaunch_started": "已请求管理员权限启动",
+    "admin_relaunch_failed": "管理员权限启动失败"
+  },
+  "about": {
+    "version": "版本",
+    "author": "作者",
+    "description": "Unity 许可证补丁工具",
+    "github": "项目主页"
+  }
+}
