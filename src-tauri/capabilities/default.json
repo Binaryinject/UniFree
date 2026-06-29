@@ -1,0 +1,14 @@
+{
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "dialog:allow-open",
+    "dialog:allow-ask",
+    "process:default",
+    "process:allow-exit",
+    "process:allow-restart"
+  ]
+}
