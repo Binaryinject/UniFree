@@ -2,6 +2,7 @@ use serde::Serialize;
 use tauri::command;
 
 use crate::alf_generator;
+use crate::app_config;
 use crate::license;
 use crate::patcher;
 use crate::scanner;
@@ -138,6 +139,26 @@ pub fn kill_process(name: String) -> Result<(), String> {
 }
 
 #[command]
+pub fn open_browser(url: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/c", "start", &url])
+            .creation_flags(0x08000000)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[command]
 pub fn launch_hub() -> Result<(), String> {
     let hub_exe = scanner::hub_resources_path()
         .parent()
@@ -179,4 +200,86 @@ pub fn generate_license_direct() -> Result<String, String> {
     let result = ulf_signer::sign_alf_to_ulf(&alf_path, &ulf_path)?;
 
     Ok(format!("License generated: {}", result))
+}
+
+#[command]
+pub fn get_hub_path() -> String {
+    let resources = scanner::hub_resources_path();
+    resources.parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+#[command]
+pub async fn select_hub_path(app: tauri::AppHandle) -> Result<String, String> {
+    use tauri_plugin_dialog::{DialogExt, FilePath};
+
+    let file = app.dialog().file()
+        .add_filter("Unity Hub", &["exe"])
+        .set_title("Select Unity Hub.exe")
+        .blocking_pick_file()
+        .ok_or("No file selected")?;
+
+    let path = match file {
+        FilePath::Path(p) => p,
+        _ => return Err("Invalid file path".into()),
+    };
+
+    let exe_path = path;
+
+    // Verify it's Unity Hub.exe
+    let exe_name = exe_path.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if !exe_name.eq_ignore_ascii_case("Unity Hub.exe") {
+        return Err("Please select Unity Hub.exe".into());
+    }
+
+    let install_dir = exe_path.parent()
+        .ok_or("Cannot get install directory")?;
+
+    // Verify resources folder exists
+    let resources_dir = install_dir.join("resources");
+    if !resources_dir.exists() {
+        return Err("Invalid Unity Hub installation: resources folder not found".into());
+    }
+
+    // Save to config
+    app_config::set_hub_install_path(&install_dir.to_string_lossy())?;
+
+    Ok(install_dir.to_string_lossy().to_string())
+}
+
+#[command]
+pub fn reset_hub_path() -> Result<(), String> {
+    app_config::reset_hub_install_path()
+}
+
+#[command]
+pub fn get_editor_scan_paths() -> Vec<String> {
+    app_config::get_editor_scan_paths()
+}
+
+#[command]
+pub async fn add_editor_scan_path(app: tauri::AppHandle) -> Result<String, String> {
+    use tauri_plugin_dialog::{DialogExt, FilePath};
+
+    let folder = app.dialog().file()
+        .set_title("Select Unity Editor Directory")
+        .blocking_pick_folder()
+        .ok_or("No folder selected")?;
+
+    let path = match folder {
+        FilePath::Path(p) => p,
+        _ => return Err("Invalid path".into()),
+    };
+
+    let path_str = path.to_string_lossy().to_string();
+    app_config::add_editor_scan_path(&path_str)?;
+    Ok(path_str)
+}
+
+#[command]
+pub fn remove_editor_scan_path(path: String) -> Result<(), String> {
+    app_config::remove_editor_scan_path(&path)
 }

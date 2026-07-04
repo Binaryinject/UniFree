@@ -2,9 +2,9 @@ import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  Box, Button, Chip, CircularProgress, Typography, Paper, Alert, Link,
+  Box, Button, Chip, CircularProgress, Typography, Paper, Alert, Link, IconButton, Divider, Tooltip,
 } from "@mui/material";
-import { Wrench, Warning, DownloadSimple } from "@phosphor-icons/react";
+import { Wrench, Warning, DownloadSimple, FolderOpen, Plus, Trash } from "@phosphor-icons/react";
 import type { LogEntry } from "../App";
 
 interface EditorInfo {
@@ -34,12 +34,14 @@ export default function EditorTab({ addLog }: Props) {
   const [scanning, setScanning] = useState(!editorScanCache);
   const [busyPath, setBusyPath] = useState<string | null>(null);
   const [batchLoading, setBatchLoading] = useState(false);
+  const [customPaths, setCustomPaths] = useState<string[]>([]);
   const hasScanned = useRef(editorScanCache !== null);
 
   useEffect(() => {
     if (!hasScanned.current) {
       scanEditors();
     }
+    loadCustomPaths();
   }, []);
 
   async function scanEditors() {
@@ -58,6 +60,37 @@ export default function EditorTab({ addLog }: Props) {
       addLog("error", `${t("log.scan_failed")}: ${e}`);
     }
     setScanning(false);
+  }
+
+  async function loadCustomPaths() {
+    try {
+      const paths = await invoke<string[]>("get_editor_scan_paths");
+      setCustomPaths(paths);
+    } catch { /* ignore */ }
+  }
+
+  async function handleAddPath() {
+    try {
+      const path = await invoke<string>("add_editor_scan_path");
+      setCustomPaths((prev) => [...prev, path]);
+      addLog("success", `Added scan directory: ${path}`);
+      editorScanCache = null;
+      await scanEditors();
+    } catch (e) {
+      addLog("error", `${e}`);
+    }
+  }
+
+  async function handleRemovePath(path: string) {
+    try {
+      await invoke("remove_editor_scan_path", { path });
+      setCustomPaths((prev) => prev.filter((p) => p !== path));
+      addLog("info", `Removed scan directory: ${path}`);
+      editorScanCache = null;
+      await scanEditors();
+    } catch (e) {
+      addLog("error", `${e}`);
+    }
   }
 
   function statusChip(status: string) {
@@ -206,14 +239,41 @@ export default function EditorTab({ addLog }: Props) {
         </Typography>
 
         <Link
-          href="https://unity3d.com/get-unity/download/archive"
-          target="_blank"
-          rel="noopener"
+          component="button"
           sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, mb: 1.5 }}
+          onClick={() => invoke("open_browser", { url: "https://unity3d.com/get-unity/download/archive" }).catch(console.error)}
         >
           <DownloadSimple size={16} />
           <Typography variant="body2">{t("editor.download")}</Typography>
         </Link>
+
+        <Box sx={{ mb: 1.5 }}>
+          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 0.5 }}>
+            <Typography variant="caption" color="text.secondary">{t("editor.custom_dirs")}</Typography>
+            <Tooltip title={t("editor.add_dir")}>
+              <IconButton size="small" onClick={handleAddPath}>
+                <Plus size={16} />
+              </IconButton>
+            </Tooltip>
+          </Box>
+          {customPaths.length > 0 && (
+            <Box sx={{ display: "flex", flexDirection: "column", gap: 0.25 }}>
+              {customPaths.map((p) => (
+                <Box key={p} sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                  <FolderOpen size={14} color="action" />
+                  <Typography variant="caption" sx={{ flex: 1, wordBreak: "break-all" }} color="text.secondary">
+                    {p}
+                  </Typography>
+                  <IconButton size="small" onClick={() => handleRemovePath(p)} sx={{ p: 0.25 }}>
+                    <Trash size={14} />
+                  </IconButton>
+                </Box>
+              ))}
+            </Box>
+          )}
+        </Box>
+
+        <Divider sx={{ mb: 1.5 }} />
 
         {scanning ? (
           <Box sx={{ display: "flex", justifyContent: "center", py: 3 }}>
@@ -247,7 +307,7 @@ export default function EditorTab({ addLog }: Props) {
                       {e.product_name} {e.version}
                     </Typography>
                     <Typography variant="caption" color="text.secondary" noWrap>
-                      {e.architecture}
+                      {e.path}
                     </Typography>
                   </Box>
                   {statusChip(e.dll_status)}

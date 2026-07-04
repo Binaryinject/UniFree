@@ -1,6 +1,6 @@
 [package]
 name = "unifree"
-version = "2.1.0"
+version = "2.2.0"
 edition = "2024"
 
 [lib]
@@ -17,6 +17,7 @@ tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 asar = "0.3"
+dirs = "5"
 alf-generator = { path = "../crates/alf-generator" }
 
 [target.'cfg(windows)'.dependencies]
@@ -26,6 +27,7 @@ windows = { version = "0.58", features = [
     "Win32_System_Threading",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Controls",
 ] }
 
 [target.'cfg(not(windows))'.dependencies]
