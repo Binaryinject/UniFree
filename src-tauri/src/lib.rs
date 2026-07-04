@@ -1,4 +1,5 @@
 mod alf_generator;
+mod app_config;
 mod commands;
 mod config_patcher;
 mod license;
@@ -25,8 +26,15 @@ pub fn run() {
             commands::check_process,
             commands::kill_process,
             commands::launch_hub,
+            commands::open_browser,
             commands::generate_alf,
             commands::generate_license_direct,
+            commands::get_hub_path,
+            commands::select_hub_path,
+            commands::reset_hub_path,
+            commands::get_editor_scan_paths,
+            commands::add_editor_scan_path,
+            commands::remove_editor_scan_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

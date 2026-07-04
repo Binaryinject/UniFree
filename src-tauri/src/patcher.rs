@@ -3,6 +3,12 @@ use std::path::{Path, PathBuf};
 
 // === Hub paths ===
 fn hub_resources_path() -> PathBuf {
+    // Check saved config first
+    if let Some(custom_path) = crate::app_config::get_hub_install_path() {
+        return custom_path.join("resources");
+    }
+
+    // Default paths
     #[cfg(target_os = "windows")]
     {
         let pf = std::env::var("PROGRAMFILES").unwrap_or_else(|_| r"C:\Program Files".into());

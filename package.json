@@ -1,22 +1,24 @@
 {
   "name": "unifree",
   "private": true,
-  "version": "2.1.0",
+  "version": "2.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1421 --strictPort",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "sync-version": "node scripts/sync-version.mjs"
   },
   "dependencies": {
-    "@mui/material": "^6.4.0",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.0",
+    "@mui/material": "^6.4.0",
     "@phosphor-icons/react": "^2.1.10",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-process": "^2",
+    "@tauri-apps/plugin-shell": "^2.3.5",
     "i18next": "^26.3.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

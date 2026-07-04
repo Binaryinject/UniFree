@@ -28,6 +28,12 @@
     "config_patch_desc": "补丁 app.asar 的登录与更新配置",
     "license_missing_signature": "Unity_lic.ulf 缺少 Signature 节点。Unity Licensing Client 会记录 Missing Signature node，并处理为 0 个授权文件。",
     "license_required_hint": "请先在许可证选项卡生成许可证，然后再补丁 Hub。",
+    "not_found_hint": "未在默认位置找到 Unity Hub，点击选择 Unity Hub.exe 位置。",
+    "select_path": "选择",
+    "install_path": "Unity Hub 位置",
+    "install_path_default": "默认: C:\\Program Files\\Unity Hub",
+    "browse": "浏览",
+    "reset": "重置",
     "auto_license_title": "自动生成许可证",
     "auto_license_desc": "从硬件信息自动生成 ALF 文件并签名创建 Unity 许可证",
     "auto_license_regenerate_desc": "为本机重新生成许可证文件。这将替换现有的许可证。",
@@ -49,7 +55,9 @@
     "restore": "还原",
     "no_editors": "未检测到已安装的 Unity Editor",
     "download": "下载 Unity Editor 历史版本",
-    "hub_first": "请先在 Hub 选项卡补丁 Unity Hub"
+    "hub_first": "请先在 Hub 选项卡补丁 Unity Hub",
+    "custom_dirs": "自定义扫描目录",
+    "add_dir": "添加目录"
   },
   "status": {
     "patched": "已补丁",
@@ -78,7 +86,8 @@
     "scan_failed": "扫描失败",
     "admin_required": "需要管理员权限",
     "admin_relaunch_started": "已请求管理员权限启动",
-    "admin_relaunch_failed": "管理员权限启动失败"
+    "admin_relaunch_failed": "管理员权限启动失败",
+    "select_hub_failed": "选择 Unity Hub 路径失败"
   },
   "about": {
     "version": "版本",

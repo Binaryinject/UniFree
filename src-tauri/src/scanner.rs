@@ -295,6 +295,12 @@ fn read_secondary_install_path() -> Option<PathBuf> {
 }
 
 pub fn hub_resources_path() -> PathBuf {
+    // Check saved config first
+    if let Some(custom_path) = crate::app_config::get_hub_install_path() {
+        return custom_path.join("resources");
+    }
+
+    // Default paths
     #[cfg(target_os = "windows")]
     {
         let pf = std::env::var("PROGRAMFILES").unwrap_or_else(|_| r"C:\Program Files".into());
@@ -332,6 +338,41 @@ pub fn scan_installed_editors() -> Vec<EditorInfo> {
     for e in read_located_editors() {
         let key = format!("{}-{}", e.version, e.architecture);
         if seen.insert(key) { all.push(e); }
+    }
+
+    // 4. Custom user-added scan paths
+    for custom_path in crate::app_config::get_editor_scan_paths() {
+        let path = PathBuf::from(&custom_path);
+        if path.exists() {
+            // Try as a direct version folder (e.g., D:\Unity\2022.3.1f1)
+            let folder_name = path.file_name().unwrap_or_default().to_string_lossy();
+            if is_version_folder(&folder_name) {
+                let exe = editor_exe_for_folder(&path);
+                if exe.exists() {
+                    let dll = dll_path_for_folder(&path);
+                    let dll_status = if dll.exists() {
+                        patcher::get_editor_dll_status(dll.to_string_lossy().as_ref())
+                    } else {
+                        "not_found".into()
+                    };
+                    let info = EditorInfo {
+                        version: folder_name.to_string(),
+                        path: exe.to_string_lossy().to_string(),
+                        dll_path: dll.to_string_lossy().to_string(),
+                        dll_status,
+                        product_name: read_product_name(&path),
+                        architecture: read_architecture(&path),
+                    };
+                    let key = format!("{}-{}", info.version, info.architecture);
+                    if seen.insert(key) { all.push(info); }
+                }
+            }
+            // Also scan as a parent directory containing version folders
+            for e in scan_folder(&path) {
+                let key = format!("{}-{}", e.version, e.architecture);
+                if seen.insert(key) { all.push(e); }
+            }
+        }
     }
 
     all
