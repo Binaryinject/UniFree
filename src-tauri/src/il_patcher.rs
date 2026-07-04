@@ -28,28 +28,6 @@ pub fn patch_signature_validation(dll_path: &str) -> Result<String, String> {
     Ok(format!("Patched: {} signature checks bypassed", patches_applied))
 }
 
-/// 查找签名验证的字节码模式
-fn find_signature_check_pattern(data: &[u8], occurrence: usize) -> Result<Option<usize>, String> {
-    // "The digital signature is invalid." 的 UTF-16 字符串
-    let signature_error = b"The digital signature is invalid.";
-
-    let mut found = 0;
-    for (i, window) in data.windows(signature_error.len()).enumerate() {
-        if window == signature_error {
-            found += 1;
-            if found == occurrence {
-                // 向前搜索 callvirt 指令 (0x6F)
-                for j in (i.saturating_sub(100)..i).rev() {
-                    if data[j] == 0x6F {
-                        return Ok(Some(j));
-                    }
-                }
-            }
-        }
-    }
-    Ok(None)
-}
-
 /// 应用二进制补丁（直接替换字节序列）
 fn apply_binary_patches(data: &mut Vec<u8>) -> Result<usize, String> {
     let mut count = 0;

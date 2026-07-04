@@ -1,13 +1,15 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import { invoke } from "@tauri-apps/api/core";
 import {
   ThemeProvider, createTheme, CssBaseline, Box, Tabs, Tab,
   IconButton, Tooltip,
 } from "@mui/material";
 import {
-  ShieldCheck, Wrench, Info, Sun, Moon, Monitor,
+  ShieldCheck, Wrench, Info, Sun, Moon, Monitor, Certificate,
 } from "@phosphor-icons/react";
 import HubTab from "./components/HubTab";
+import LicenseTab from "./components/LicenseTab";
 import EditorTab from "./components/EditorTab";
 import AboutTab from "./components/AboutTab";
 import LogPanel from "./components/LogPanel";
@@ -101,12 +103,41 @@ export default function App() {
 
   const clearLogs = useCallback(() => setLogs([]), []);
 
+  // 共用状态 - 立即初始化，不等待后端
+  const [licenseStatus, setLicenseStatus] = useState<string>("not_found");
+  const [isAdmin, setIsAdmin] = useState(true); // 默认假设是管理员
+
+  // 异步检查状态，不阻塞UI
+  useEffect(() => {
+    checkLicenseStatus();
+    checkAdminStatus();
+  }, []);
+
+  async function checkLicenseStatus() {
+    try {
+      const status = await invoke<string>("check_license_status");
+      setLicenseStatus(status);
+    } catch (e) {
+      console.error("License check failed:", e);
+    }
+  }
+
+  async function checkAdminStatus() {
+    try {
+      const admin = await invoke<boolean>("check_admin");
+      setIsAdmin(admin);
+    } catch (e) {
+      console.error("Admin check failed:", e);
+    }
+  }
+
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <Box className="app-container">
         <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: 1, borderColor: "divider", px: 1 }}>
           <Tabs value={tab} onChange={(_, v) => setTab(v)}>
+            <Tab icon={<Certificate size={16} />} label={t("tabs.license")} iconPosition="start" />
             <Tab icon={<ShieldCheck size={16} />} label={t("tabs.hub")} iconPosition="start" />
             <Tab icon={<Wrench size={16} />} label={t("tabs.editor")} iconPosition="start" />
             <Tab icon={<Info size={16} />} label={t("tabs.about")} iconPosition="start" />
@@ -118,9 +149,10 @@ export default function App() {
           </Tooltip>
         </Box>
         <Box className="tab-body">
-          {tab === 0 && <HubTab addLog={addLog} />}
-          {tab === 1 && <EditorTab addLog={addLog} />}
-          {tab === 2 && <AboutTab />}
+          {tab === 0 && <LicenseTab addLog={addLog} licenseStatus={licenseStatus} isAdmin={isAdmin} onRefresh={checkLicenseStatus} />}
+          {tab === 1 && <HubTab addLog={addLog} licenseStatus={licenseStatus} isAdmin={isAdmin} onRefresh={checkLicenseStatus} />}
+          {tab === 2 && <EditorTab addLog={addLog} />}
+          {tab === 3 && <AboutTab />}
         </Box>
         <LogPanel logs={logs} clearLogs={clearLogs} />
       </Box>

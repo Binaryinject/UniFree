@@ -7,6 +7,7 @@
   },
   "tabs": {
     "hub": "Unity Hub",
+    "license": "License",
     "editor": "Unity Editor",
     "about": "About"
   },
@@ -23,17 +24,21 @@
     "disable_signin_desc": "Skip Unity Hub mandatory sign-in requirement",
     "disable_update": "Block Updates",
     "disable_update_desc": "Disable Unity Hub auto-update check",
-    "cert_patch": "Licensing Client",
-    "cert_patch_desc": "Replace System.Security.Cryptography.Xml.dll to bypass signature verification",
     "config_patch": "Hub Config",
     "config_patch_desc": "Patch app.asar sign-in and update settings",
-    "license": "License File",
-    "license_desc": "Copy Unity_lic.ulf to system directory",
     "license_missing_signature": "Unity_lic.ulf is missing the Signature node. Unity Licensing Client logs this as Missing Signature node and processes 0 license files.",
-    "unihacker_method_title": "UniHacker True Method",
-    "unihacker_method_step1": "Replace System.Security.Cryptography.Xml.dll (160KB cracked version)",
-    "unihacker_method_step2": "Bypass XML signature verification",
-    "unihacker_method_step3": "No PEM certificate or IL code modification needed"
+    "license_required_hint": "Please generate a license in the License tab first, then patch Hub.",
+    "auto_license_title": "Auto-Generate License",
+    "auto_license_desc": "Automatically generate ALF file from hardware info and sign to create Unity license",
+    "auto_license_regenerate_desc": "Regenerate license file for this machine. This will replace the existing license.",
+    "generate_license_btn": "Generate License",
+    "generating_license_btn": "Generating...",
+    "generating_alf": "Generating ALF file from hardware info...",
+    "alf_generated": "ALF file generated successfully",
+    "generating_license": "Signing and generating ULF file...",
+    "license_generated_success": "Unity license generated and installed successfully",
+    "license_generation_failed": "License generation failed",
+    "license_status": "License status"
   },
   "editor": {
     "title": "Unity Editor Management",

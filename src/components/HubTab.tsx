@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -6,44 +6,46 @@ import {
 } from "@mui/material";
 import { ShieldCheck, ArrowCounterClockwise, Warning } from "@phosphor-icons/react";
 import type { LogEntry } from "../App";
+import { clearEditorScanCache } from "./EditorTab";
 
 interface Props {
   addLog: (level: LogEntry["level"], message: string) => void;
+  licenseStatus: string;
+  isAdmin: boolean;
+  onRefresh: () => Promise<void>;
 }
 
-export default function HubTab({ addLog }: Props) {
+// 缓存扫描结果，避免重复扫描
+let hubScanCache: { status: string; config: string } | null = null;
+
+export default function HubTab({ addLog, licenseStatus, isAdmin, onRefresh }: Props) {
   const { t } = useTranslation();
-  const [hubStatus, setHubStatus] = useState<string>("unknown");
-  const [hubConfigStatus, setHubConfigStatus] = useState<string>("unknown");
-  const [hubCertStatus, setHubCertStatus] = useState<string>("unknown");
-  const [licenseStatus, setLicenseStatus] = useState<string>("unknown");
-  const [isAdmin, setIsAdmin] = useState(true);
+  const [hubStatus, setHubStatus] = useState<string>(hubScanCache?.status ?? "unknown");
+  const [hubConfigStatus, setHubConfigStatus] = useState<string>(hubScanCache?.config ?? "unknown");
   const [loading, setLoading] = useState(false);
-  const [scanning, setScanning] = useState(true);
   const [disableSignin, setDisableSignin] = useState(true);
   const [disableUpdate, setDisableUpdate] = useState(true);
+  const hasScanned = useRef(hubScanCache !== null);
 
-  useEffect(() => { scanHub(); }, []);
+  useEffect(() => {
+    if (!hasScanned.current) {
+      scanHub();
+    }
+  }, []);
 
   async function scanHub() {
-    setScanning(true);
+    hasScanned.current = true;
     try {
-      const [status, config, cert, license, admin] = await Promise.all([
+      const [status, config] = await Promise.all([
         invoke<string>("check_hub_dll_status"),
         invoke<string>("check_hub_config_status"),
-        invoke<string>("check_hub_cert_status"),
-        invoke<string>("check_license_status"),
-        invoke<boolean>("check_admin"),
       ]);
       setHubStatus(status);
       setHubConfigStatus(config);
-      setHubCertStatus(cert);
-      setLicenseStatus(license);
-      setIsAdmin(admin);
+      hubScanCache = { status, config };
     } catch (e) {
       addLog("error", `${t("log.scan_failed")}: ${e}`);
     }
-    setScanning(false);
   }
 
   function statusChip(status: string) {
@@ -104,11 +106,14 @@ export default function HubTab({ addLog }: Props) {
       } catch (e) {
         addLog("error", `${t("log.hub_launch_failed")}: ${e}`);
       }
+      // 清除EditorTab缓存，使其重新检测Hub状态
+      clearEditorScanCache();
     } catch (e) {
       addLog("error", `[Hub] ${e}`);
     }
     setLoading(false);
     await scanHub();
+    await onRefresh();
   }
 
   async function handleRestore() {
@@ -134,6 +139,7 @@ export default function HubTab({ addLog }: Props) {
     }
     setLoading(false);
     await scanHub();
+    await onRefresh();
   }
 
   async function handleRelaunchAsAdmin() {
@@ -171,34 +177,28 @@ export default function HubTab({ addLog }: Props) {
         </Alert>
       )}
 
+      {licenseStatus !== "authorized" && licenseStatus !== "missing_signature" && (
+        <Alert severity="info" icon={<Warning size={18} />} sx={{ mb: 1 }}>
+          {t("hub.license_required_hint")}
+        </Alert>
+      )}
+
       <Paper variant="outlined" sx={{ p: 2 }}>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
           <ShieldCheck size={20} />
           <Typography variant="subtitle1" fontWeight={600}>{t("hub.title")}</Typography>
-          {scanning ? <CircularProgress size={16} /> : statusChip(hubStatus)}
+          {statusChip(hubStatus)}
         </Box>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           {t("hub.desc")}
         </Typography>
 
-        <Alert severity="info" icon={<ShieldCheck size={18} />} sx={{ mb: 2 }}>
-          <Typography variant="body2" fontWeight={600}>{t("hub.unihacker_method_title")}</Typography>
-          <Typography variant="caption" display="block">
-            • {t("hub.unihacker_method_step1")}
-          </Typography>
-          <Typography variant="caption" display="block">
-            • {t("hub.unihacker_method_step2")}
-          </Typography>
-          <Typography variant="caption" display="block">
-            • {t("hub.unihacker_method_step3")}
-          </Typography>
-        </Alert>
-
+        {/* Hub 补丁 - 需要许可证已授权 */}
         <Box sx={{ display: "flex", gap: 1, mb: 2 }}>
           <Button
             variant="contained"
             startIcon={loading ? <CircularProgress size={16} color="inherit" /> : <ShieldCheck size={16} />}
-            disabled={loading || isPatched || !isAdmin}
+            disabled={loading || isPatched || !isAdmin || licenseStatus !== "authorized"}
             onClick={handlePatch}
             sx={{ flex: 1 }}
           >
@@ -217,20 +217,12 @@ export default function HubTab({ addLog }: Props) {
 
         <Divider sx={{ my: 1.5 }} />
 
-        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, mb: 1 }}>
-          <Box sx={{ minWidth: 0 }}>
-            <Typography variant="body2">{t("hub.cert_patch")}</Typography>
-            <Typography variant="caption" color="text.secondary">{t("hub.cert_patch_desc")}</Typography>
-          </Box>
-          {scanning ? <CircularProgress size={16} /> : statusChip(hubCertStatus)}
-        </Box>
-
         <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, mb: 1.5 }}>
           <Box sx={{ minWidth: 0 }}>
             <Typography variant="body2">{t("hub.config_patch")}</Typography>
             <Typography variant="caption" color="text.secondary">{t("hub.config_patch_desc")}</Typography>
           </Box>
-          {scanning ? <CircularProgress size={16} /> : statusChip(hubConfigStatus)}
+          {statusChip(hubConfigStatus)}
         </Box>
 
         <FormControlLabel
@@ -252,14 +244,6 @@ export default function HubTab({ addLog }: Props) {
             </Box>
           }
         />
-
-        <Box sx={{ mt: 1, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1 }}>
-          <Box sx={{ minWidth: 0 }}>
-            <Typography variant="body2">{t("hub.license")}</Typography>
-            <Typography variant="caption" color="text.secondary">{t("hub.license_desc")}</Typography>
-          </Box>
-          {scanning ? <CircularProgress size={16} /> : statusChip(licenseStatus)}
-        </Box>
       </Paper>
     </Box>
   );

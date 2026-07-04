@@ -1,0 +1,28 @@
+[package]
+name = "alf-generator"
+version = "1.0.0"
+edition = "2021"
+description = "Unity ALF (Activation License File) generator - compatible with Unity Licensing Client"
+license = "MIT"
+repository = "https://github.com/UniFree/alf-generator"
+
+[dependencies]
+sha1 = "0.10"
+base64 = "0.22"
+chrono = "0.4"
+hex = "0.4"
+sys-locale = "0.3"
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+
+[features]
+default = ["cli"]
+cli = ["dep:serde", "dep:serde_json"]
+
+[[bin]]
+name = "alf-gen"
+path = "src/main.rs"
+required-features = ["cli"]

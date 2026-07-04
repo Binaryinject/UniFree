@@ -1,12 +1,11 @@
 use serde::Serialize;
 use tauri::command;
 
-use crate::config;
-use crate::i18n;
-use crate::il_patcher;
+use crate::alf_generator;
 use crate::license;
 use crate::patcher;
 use crate::scanner;
+use crate::ulf_signer;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -22,18 +21,8 @@ pub struct EditorInfo {
 }
 
 #[command]
-pub fn get_system_lang() -> String {
-    i18n::get_system_lang()
-}
-
-#[command]
 pub fn scan_unity_editors() -> Vec<EditorInfo> {
     scanner::scan_installed_editors()
-}
-
-#[command]
-pub fn check_editor_dll_status(dll_path: String) -> String {
-    patcher::get_editor_dll_status(&dll_path)
 }
 
 #[command]
@@ -48,13 +37,8 @@ pub fn check_hub_config_status() -> String {
 }
 
 #[command]
-pub fn check_hub_cert_status() -> String {
-    patcher::get_hub_cert_status()
-}
-
-#[command]
 pub fn patch_editor_dll(dll_path: String) -> Result<String, String> {
-    patcher::patch_editor(&dll_path)
+    patcher::patch_entitlement_resolver(&dll_path)
 }
 
 #[command]
@@ -75,16 +59,6 @@ pub fn restore_dll(dll_path: String) -> Result<String, String> {
 }
 
 #[command]
-pub fn write_sign_in_config() -> Result<String, String> {
-    config::write_config()
-}
-
-#[command]
-pub fn delete_sign_in_config() -> Result<String, String> {
-    config::delete_config()
-}
-
-#[command]
 pub fn copy_license() -> Result<String, String> {
     license::copy_ulf()
 }
@@ -98,12 +72,28 @@ pub fn check_license_status() -> String {
 pub fn check_admin() -> bool {
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("net")
-            .arg("session")
-            .creation_flags(0x08000000)
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false)
+        // 使用 Windows API 直接检测管理员权限，无需启动外部进程
+        use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+        use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+        
+        unsafe {
+            let mut token_handle = Default::default();
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token_handle).is_ok() {
+                let mut elevation: TOKEN_ELEVATION = Default::default();
+                let mut return_length = 0u32;
+                if GetTokenInformation(
+                    token_handle,
+                    TokenElevation,
+                    Some(&mut elevation as *mut _ as *mut _),
+                    std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+                    &mut return_length,
+                ).is_ok()
+                {
+                    return elevation.TokenIsElevated != 0;
+                }
+            }
+            false
+        }
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -135,11 +125,6 @@ pub fn relaunch_as_admin() -> Result<(), String> {
     {
         Err("Administrator relaunch is only supported on Windows".into())
     }
-}
-
-#[command]
-pub fn get_hub_dll_path() -> String {
-    scanner::get_hub_dll_path()
 }
 
 #[command]
@@ -178,6 +163,20 @@ pub fn launch_hub() -> Result<(), String> {
 }
 
 #[command]
-pub fn patch_dll_il(dll_path: String) -> Result<String, String> {
-    il_patcher::patch_signature_validation(&dll_path)
+pub fn generate_alf() -> Result<String, String> {
+    let alf_path = alf_generator::generate_alf_file()?;
+    Ok(format!("ALF generated: {}", alf_path.display()))
+}
+
+#[command]
+pub fn generate_license_direct() -> Result<String, String> {
+    // 1. 生成 ALF 文件
+    let alf_path = alf_generator::generate_alf_file()?;
+    eprintln!("ALF generated at: {}", alf_path.display());
+
+    // 2. 转为 ULF（添加空签名，DLL已绕过验证）
+    let ulf_path = std::path::PathBuf::from(r"C:\ProgramData\Unity\Unity_lic.ulf");
+    let result = ulf_signer::sign_alf_to_ulf(&alf_path, &ulf_path)?;
+
+    Ok(format!("License generated: {}", result))
 }
