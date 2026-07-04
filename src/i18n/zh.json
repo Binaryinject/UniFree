@@ -7,6 +7,7 @@
   },
   "tabs": {
     "hub": "Unity Hub",
+    "license": "许可证",
     "editor": "Unity Editor",
     "about": "关于"
   },
@@ -23,17 +24,21 @@
     "disable_signin_desc": "跳过 Unity Hub 强制登录要求",
     "disable_update": "屏蔽升级",
     "disable_update_desc": "禁止 Unity Hub 自动检查更新",
-    "cert_patch": "授权客户端",
-    "cert_patch_desc": "替换 System.Security.Cryptography.Xml.dll 绕过签名验证",
     "config_patch": "Hub 配置",
     "config_patch_desc": "补丁 app.asar 的登录与更新配置",
-    "license": "授权文件",
-    "license_desc": "拷贝 Unity_lic.ulf 到系统目录",
     "license_missing_signature": "Unity_lic.ulf 缺少 Signature 节点。Unity Licensing Client 会记录 Missing Signature node，并处理为 0 个授权文件。",
-    "unihacker_method_title": "UniHacker 真正方法",
-    "unihacker_method_step1": "替换 System.Security.Cryptography.Xml.dll（160KB 破解版）",
-    "unihacker_method_step2": "绕过 XML 签名验证",
-    "unihacker_method_step3": "无需修改 PEM 证书或 IL 代码"
+    "license_required_hint": "请先在许可证选项卡生成许可证，然后再补丁 Hub。",
+    "auto_license_title": "自动生成许可证",
+    "auto_license_desc": "从硬件信息自动生成 ALF 文件并签名创建 Unity 许可证",
+    "auto_license_regenerate_desc": "为本机重新生成许可证文件。这将替换现有的许可证。",
+    "generate_license_btn": "生成许可证",
+    "generating_license_btn": "正在生成...",
+    "generating_alf": "正在从硬件信息生成 ALF 文件...",
+    "alf_generated": "ALF 文件生成成功",
+    "generating_license": "正在签名生成 ULF 文件...",
+    "license_generated_success": "Unity 许可证生成并安装成功",
+    "license_generation_failed": "许可证生成失败",
+    "license_status": "许可证状态"
   },
   "editor": {
     "title": "Unity Editor 管理",

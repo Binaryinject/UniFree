@@ -294,29 +294,6 @@ fn read_secondary_install_path() -> Option<PathBuf> {
     None
 }
 
-fn hub_licensing_dir() -> PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        let pf = std::env::var("PROGRAMFILES").unwrap_or_else(|_| r"C:\Program Files".into());
-        PathBuf::from(pf).join("Unity Hub").join("UnityLicensingClient_V1")
-    }
-    #[cfg(target_os = "macos")]
-    {
-        PathBuf::from("/Applications/Unity Hub.app/Contents/Resources").join("UnityLicensingClient_V1")
-    }
-    #[cfg(target_os = "linux")]
-    {
-        PathBuf::from("/usr/share/unityhub").join("UnityLicensingClient_V1")
-    }
-}
-
-pub fn get_hub_dll_path() -> String {
-    hub_licensing_dir()
-        .join("Unity.Licensing.EntitlementResolver.dll")
-        .to_string_lossy()
-        .to_string()
-}
-
 pub fn hub_resources_path() -> PathBuf {
     #[cfg(target_os = "windows")]
     {

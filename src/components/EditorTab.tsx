@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -20,17 +20,30 @@ interface Props {
   addLog: (level: LogEntry["level"], message: string) => void;
 }
 
+// 缓存扫描结果，避免重复扫描
+let editorScanCache: { editors: EditorInfo[]; hubPatched: boolean } | null = null;
+
+export function clearEditorScanCache() {
+  editorScanCache = null;
+}
+
 export default function EditorTab({ addLog }: Props) {
   const { t } = useTranslation();
-  const [editors, setEditors] = useState<EditorInfo[]>([]);
-  const [hubPatched, setHubPatched] = useState(true);
-  const [scanning, setScanning] = useState(true);
+  const [editors, setEditors] = useState<EditorInfo[]>(editorScanCache?.editors ?? []);
+  const [hubPatched, setHubPatched] = useState(editorScanCache?.hubPatched ?? true);
+  const [scanning, setScanning] = useState(!editorScanCache);
   const [busyPath, setBusyPath] = useState<string | null>(null);
   const [batchLoading, setBatchLoading] = useState(false);
+  const hasScanned = useRef(editorScanCache !== null);
 
-  useEffect(() => { scanEditors(); }, []);
+  useEffect(() => {
+    if (!hasScanned.current) {
+      scanEditors();
+    }
+  }, []);
 
   async function scanEditors() {
+    hasScanned.current = true;
     setScanning(true);
     try {
       const [list, hub] = await Promise.all([
@@ -38,7 +51,9 @@ export default function EditorTab({ addLog }: Props) {
         invoke<string>("check_hub_dll_status"),
       ]);
       setEditors(list);
-      setHubPatched(hub === "patched");
+      const patched = hub === "patched" || hub === "patched_no_backup" || hub === "partial";
+      setHubPatched(patched);
+      editorScanCache = { editors: list, hubPatched: patched };
     } catch (e) {
       addLog("error", `${t("log.scan_failed")}: ${e}`);
     }
@@ -111,7 +126,6 @@ export default function EditorTab({ addLog }: Props) {
     if (targets.length === 0) return;
     setBatchLoading(true);
 
-    // Check if Unity Editor is running
     if (action === "patch") {
       try {
         const running = await invoke<boolean>("check_process", { name: "Unity.exe" });

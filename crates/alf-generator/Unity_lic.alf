@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+  <License id="Terms">
+    <MachineBindings>
+      <Binding Key="1" Value="00330-80000-00000-AA757" />
+      <Binding Key="2" Value="XM0_0000000000200085" />
+      <Binding Key="4" Value="Tm90IEFwcGxpY2FibGU=" />
+      <Binding Key="5" Value="80:fa:5b:0a:9d:21" />
+    </MachineBindings>
+    <MachineID Value="UCm/lZx3zQ6a4Cyz8KtktnuQzJ8=" />
+    <UnityVersion Value="2017.2.0" />
+  </License>
+</root>

@@ -1,17 +1,17 @@
-# UniFree 2.0
+# UniFree 2.1.0
 
-> Unity Hub & Editor License Patcher - UniHacker True Method
+> Unity Hub & Editor License Patcher
 
-## 🎉 Features
+## Features
 
-- ✅ **True UniHacker Method** - Replace System.Security.Cryptography.Xml.dll to bypass signature verification
-- ✅ **Unity Hub Patcher** - Disable sign-in and auto-update
-- ✅ **Unity Editor Scanner** - Auto-detect and patch installed editors
-- ✅ **Modern GUI** - Built with Tauri + React + Material-UI
-- ✅ **i18n Support** - Chinese & English
-- ✅ **Automatic Backup** - All modifications are reversible
+- **Unity Hub Patching** - Bypass license validation via JavaScript patching (UniHacker method)
+- **Unity Editor Patching** - Replace DLL to bypass signature verification
+- **License Generation** - Generate valid license files from hardware info
+- **Modern GUI** - Built with Tauri 2.0 + React + Material-UI
+- **i18n Support** - Chinese & English
+- **Automatic Backup** - All modifications are reversible
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Download
 
@@ -20,50 +20,52 @@ Download the latest release from [Releases](https://github.com/Binaryinject/UniF
 ### Usage
 
 1. **Right-click `unifree.exe` → Run as Administrator**
-2. Click **"Hub"** tab
-3. Click **"Patch Hub"** button
-4. Wait for completion
+2. Go to **License** tab → Click **"Generate License"**
+3. Go to **Hub** tab → Click **"Patch Hub"**
+4. Unity Hub will launch automatically
+5. To patch Editor: Go to **Editor** tab → Click **"Patch"** for each editor
 
-### Verify
+## How It Works
 
-```bash
-cd "C:\Program Files\Unity Hub\UnityLicensingClient_V1"
-.\Unity.Licensing.Client.exe --showAllEntitlements
-```
+### Hub Patching (JavaScript Method)
 
-Expected output:
-```
-Product Name: Unity Pro
-Status: Valid ✅
-License Version: 6.x
-Update Date: 2096-06-26
-```
+UniFree extracts `app.asar` and patches JavaScript files to bypass license validation:
 
-## 📋 How It Works
+| File | Patch |
+|------|-------|
+| `licenseService-*.js` | `isLicenseValid()` → return `true` |
+| `licenseQueryService-*.js` | `isLicenseValid()` → return `true` |
+| `licenseQueryService-*.js` | `getLicense()` → return fake Unity Pro data |
+| `DefaultLocalConfig-*.js` | `DisableSignIn` → `true` |
+| `DefaultLocalConfig-*.js` | `DisableSignInRequired` → `true` |
+| `DefaultLocalConfig-*.js` | `DisableAutoUpdate` → `true` |
 
-### UniHacker True Method
+### Editor Patching (DLL Replacement)
 
-UniFree 2.0 implements the **true UniHacker method**:
+Replaces `Unity.Licensing.EntitlementResolver.dll` with a pre-patched version that bypasses `ValidateSignature`.
 
-1. **Replace DLL**: Replaces `System.Security.Cryptography.Xml.dll` (435 KB → 160 KB cracked version)
-2. **Bypass Verification**: The cracked DLL skips XML signature verification
-3. **No IL Patching**: No need to modify IL code or PEM certificates
+### License Generation
 
-### What Gets Modified
+1. Collects hardware info (Windows Product ID, Disk Serial, BIOS Serial, MAC Address)
+2. Generates ALF (Activation License File) with real machine bindings
+3. Converts to ULF with dummy signature node
+4. Writes to `C:\ProgramData\Unity\Unity_lic.ulf`
 
-| File | Original | Modified | Backup |
-|------|----------|----------|--------|
-| System.Security.Cryptography.Xml.dll | 435 KB | 160 KB | ✅ .bak |
-| app.asar | 34 MB | 34 MB | ✅ .bak |
-| Unity_lic.ulf | - | 2.6 KB | - |
+## What Gets Modified
 
-## 🔧 Build from Source
+| Component | File | Action |
+|-----------|------|--------|
+| Hub | `app.asar` | Extract to `app/`, patch JS, rename to `.bak` |
+| Hub | `hubConfig.json` | Update sign-in and update settings |
+| Editor | `Unity.Licensing.EntitlementResolver.dll` | Replace with pre-patched version |
+| License | `C:\ProgramData\Unity\Unity_lic.ulf` | Generate and write license file |
+
+## Build from Source
 
 ### Prerequisites
 
 - Node.js 18+
 - Rust 1.70+
-- npm or yarn
 
 ### Build Steps
 
@@ -75,16 +77,16 @@ npm install
 npm run build
 
 # Build Tauri app
-npm run tauri build
+cargo tauri build
 ```
 
-## 📚 Documentation
+## Documentation
 
-- [Quick Start Guide](QUICK_START.md)
-- [UniHacker Method Explained](TRUE_UNIHACKER_METHOD.md)
-- [Complete Documentation](FINAL_VERSION_README.md)
+- [Architecture](docs/architecture.md)
+- [Editor DLL Patching](docs/editor-dll-patching.md)
+- [Hub ASAR Patching](docs/hub-asar-patching.md)
 
-## ⚠️ Disclaimer
+## Disclaimer
 
 **For educational purposes only.**
 
@@ -93,27 +95,17 @@ npm run tauri build
 - Consider using Unity Personal (free) or purchasing a legitimate license
 - The author is not responsible for any misuse
 
-## 🙏 Credits
+## Credits
 
-- **UniHacker** - Original method inspiration
-- **Tauri** - Cross-platform desktop framework
-- **React** - UI framework
-- **Material-UI** - UI components
+- [UniHacker](https://gitee.com/WitLau/UniHacker) - Original method inspiration
+- [Tauri](https://tauri.app/) - Cross-platform desktop framework
+- [React](https://react.dev/) - UI framework
+- [Material-UI](https://mui.com/) - UI components
 
-## 📊 Project Stats
-
-- **Code Lines**: 1000+
-- **Documentation**: 24 files
-- **Languages**: Rust, TypeScript, Python
-- **Build Size**: 9.3 MB
-
-## 📄 License
+## License
 
 MIT License - See [LICENSE](LICENSE) for details
 
 ---
 
-**UniFree 2.0** - Unity License Freedom Tool  
-Built with ❤️ using Tauri + React + Rust
-
-🎊 **Project Complete!**
+**UniFree 2.1.0** - Unity License Freedom Tool

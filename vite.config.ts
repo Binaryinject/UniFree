@@ -13,5 +13,9 @@ export default defineConfig(async () => ({
     hmr: host
       ? { protocol: "ws", host, port: 1421 }
       : undefined,
+    watch: {
+      // 排除 Rust 构建目录，避免文件锁定问题
+      ignored: ["**/src-tauri/target/**"],
+    },
   },
 }));
