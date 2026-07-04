@@ -1,4 +1,6 @@
-# UniFree 2.1.0
+# UniFree 2.2.0
+
+[English](README.md) | [中文](README_CN.md)
 
 > Unity Hub & Editor License Patcher
 
@@ -7,6 +9,7 @@
 - **Unity Hub Patching** - Bypass license validation via JavaScript patching (UniHacker method)
 - **Unity Editor Patching** - Replace DLL to bypass signature verification
 - **License Generation** - Generate valid license files from hardware info
+- **Custom Paths** - Support custom Hub and Editor directories
 - **Modern GUI** - Built with Tauri 2.0 + React + Material-UI
 - **i18n Support** - Chinese & English
 - **Automatic Backup** - All modifications are reversible
@@ -36,7 +39,6 @@ UniFree extracts `app.asar` and patches JavaScript files to bypass license valid
 | `licenseService-*.js` | `isLicenseValid()` → return `true` |
 | `licenseQueryService-*.js` | `isLicenseValid()` → return `true` |
 | `licenseQueryService-*.js` | `getLicense()` → return fake Unity Pro data |
-| `DefaultLocalConfig-*.js` | `DisableSignIn` → `true` |
 | `DefaultLocalConfig-*.js` | `DisableSignInRequired` → `true` |
 | `DefaultLocalConfig-*.js` | `DisableAutoUpdate` → `true` |
 
@@ -80,12 +82,6 @@ npm run build
 cargo tauri build
 ```
 
-## Documentation
-
-- [Architecture](docs/architecture.md)
-- [Editor DLL Patching](docs/editor-dll-patching.md)
-- [Hub ASAR Patching](docs/hub-asar-patching.md)
-
 ## Disclaimer
 
 **For educational purposes only.**
@@ -108,4 +104,4 @@ MIT License - See [LICENSE](LICENSE) for details
 
 ---
 
-**UniFree 2.1.0** - Unity License Freedom Tool
+**UniFree 2.2.0** - Unity License Freedom Tool
