@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   Box, Button, Chip, CircularProgress, Typography, Paper, Alert, Link, IconButton, Divider, Tooltip,
 } from "@mui/material";
-import { Wrench, Warning, DownloadSimple, FolderOpen, Plus, Trash } from "@phosphor-icons/react";
+import { Wrench, Warning, DownloadSimple, FolderOpen, Plus, Trash, ArrowClockwise } from "@phosphor-icons/react";
 import type { LogEntry } from "../App";
 
 interface EditorInfo {
@@ -142,7 +142,13 @@ export default function EditorTab({ addLog }: Props) {
         addLog("success", `[${editor.version}] ${t("editor.restore")} ✓`);
       }
     } catch (e) {
-      addLog("error", `[${editor.version}] ${e}`);
+      const err = String(e);
+      if (err.includes("not supported")) {
+        const ver = editor.version.split(".")[0];
+        addLog("error", `[${editor.version}] ${t("editor.version_not_supported", { version: ver })}`);
+      } else {
+        addLog("error", `[${editor.version}] ${err}`);
+      }
     }
     setBusyPath(null);
     await scanEditors();
@@ -180,7 +186,13 @@ export default function EditorTab({ addLog }: Props) {
           addLog("success", `[${e.version}] ${t("editor.restore")} ✓`);
         }
       } catch (err) {
-        addLog("error", `[${e.version}] ${err}`);
+        const errStr = String(err);
+        if (errStr.includes("not supported")) {
+          const ver = e.version.split(".")[0];
+          addLog("error", `[${e.version}] ${t("editor.version_not_supported", { version: ver })}`);
+        } else {
+          addLog("error", `[${e.version}] ${errStr}`);
+        }
       }
     }
     if (action === "patch") {
@@ -211,6 +223,15 @@ export default function EditorTab({ addLog }: Props) {
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
             <Wrench size={18} />
             <Typography variant="subtitle1" fontWeight={600}>{t("editor.title")}</Typography>
+            <Tooltip title={t("editor.refresh")}>
+              <IconButton
+                size="small"
+                disabled={scanning}
+                onClick={async () => { editorScanCache = null; await scanEditors(); }}
+              >
+                <ArrowClockwise size={16} className={scanning ? "spin" : ""} />
+              </IconButton>
+            </Tooltip>
           </Box>
           <Box sx={{ display: "flex", gap: 1 }}>
             <Button

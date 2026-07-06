@@ -1,0 +1,41 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v8.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v8.0": {
+      "analyze-dll/1.0.0": {
+        "dependencies": {
+          "dnlib": "4.4.0"
+        },
+        "runtime": {
+          "analyze-dll.dll": {}
+        }
+      },
+      "dnlib/4.4.0": {
+        "runtime": {
+          "lib/net6.0/dnlib.dll": {
+            "assemblyVersion": "4.4.0.0",
+            "fileVersion": "4.4.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "analyze-dll/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "dnlib/4.4.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-cKHI720q+zfEEvzklWVGt6B0TH3AibAyJbpUJl4U6KvTP13tycfnqJpkGHRZ/oQ45BTIoIxIwltHIJVDN+iCqQ==",
+      "path": "dnlib/4.4.0",
+      "hashPath": "dnlib.4.4.0.nupkg.sha512"
+    }
+  }
+}

@@ -59,6 +59,8 @@ pub fn restore_dll(dll_path: String) -> Result<String, String> {
     patcher::restore(&dll_path)
 }
 
+
+
 #[command]
 pub fn copy_license() -> Result<String, String> {
     license::copy_ulf()
@@ -169,8 +171,9 @@ pub fn launch_hub() -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new(&hub_exe)
-            .creation_flags(0x00000008)
+        // Use explorer.exe to launch without inheriting admin privileges
+        std::process::Command::new("explorer.exe")
+            .arg(&hub_exe)
             .spawn()
             .map_err(|e| e.to_string())?;
     }
@@ -185,19 +188,19 @@ pub fn launch_hub() -> Result<(), String> {
 
 #[command]
 pub fn generate_alf() -> Result<String, String> {
-    let alf_path = alf_generator::generate_alf_file()?;
+    let alf_path = alf_generator::generate_alf_file("Unity Pro")?;
     Ok(format!("ALF generated: {}", alf_path.display()))
 }
 
 #[command]
-pub fn generate_license_direct() -> Result<String, String> {
-    // 1. 生成 ALF 文件
-    let alf_path = alf_generator::generate_alf_file()?;
+pub fn generate_license_direct(product: String, private_key_pem: Option<String>) -> Result<String, String> {
+    // 1. 生成 ALF 文件（根据产品类型选择不同 feature 集）
+    let alf_path = alf_generator::generate_alf_file(&product)?;
     eprintln!("ALF generated at: {}", alf_path.display());
 
-    // 2. 转为 ULF（添加空签名，DLL已绕过验证）
+    // 2. 转为 ULF（用RSA密钥签名）
     let ulf_path = std::path::PathBuf::from(r"C:\ProgramData\Unity\Unity_lic.ulf");
-    let result = ulf_signer::sign_alf_to_ulf(&alf_path, &ulf_path)?;
+    let result = ulf_signer::sign_alf_to_ulf(&alf_path, &ulf_path, private_key_pem.as_deref())?;
 
     Ok(format!("License generated: {}", result))
 }

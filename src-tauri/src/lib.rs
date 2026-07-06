@@ -35,6 +35,7 @@ pub fn run() {
             commands::get_editor_scan_paths,
             commands::add_editor_scan_path,
             commands::remove_editor_scan_path,
+
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

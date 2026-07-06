@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use alf_generator::AlfGenerator;
 
 /// 生成 ALF 文件内容
-pub fn generate_alf_content() -> String {
-    let generator = AlfGenerator::new();
+pub fn generate_alf_content(product: &str) -> String {
+    let generator = AlfGenerator::new().with_product(product);
     generator.generate()
 }
 
@@ -15,17 +15,17 @@ pub fn get_alf_path() -> PathBuf {
             let home = std::env::var("USERPROFILE").unwrap_or_else(|_| r"C:\Users\Public".into());
             format!(r"{}\AppData\Local", home)
         });
-    
+
     let alf_dir = PathBuf::from(local_app_data).join("UniFree");
     let _ = fs::create_dir_all(&alf_dir);
-    
+
     alf_dir.join("Unity_lic.alf")
 }
 
 /// 生成并保存 ALF 文件
-pub fn generate_alf_file() -> Result<PathBuf, String> {
+pub fn generate_alf_file(product: &str) -> Result<PathBuf, String> {
     let alf_path = get_alf_path();
-    let alf_content = generate_alf_content();
+    let alf_content = generate_alf_content(product);
 
     fs::write(&alf_path, alf_content)
         .map_err(|e| format!("Failed to write ALF file: {}", e))?;
