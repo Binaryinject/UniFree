@@ -1,5 +1,6 @@
 use serde::Serialize;
 use tauri::command;
+use tauri::AppHandle;
 
 use crate::alf_generator;
 use crate::app_config;
@@ -7,6 +8,7 @@ use crate::license;
 use crate::patcher;
 use crate::scanner;
 use crate::ulf_signer;
+use crate::updater;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -285,4 +287,20 @@ pub async fn add_editor_scan_path(app: tauri::AppHandle) -> Result<String, Strin
 #[command]
 pub fn remove_editor_scan_path(path: String) -> Result<(), String> {
     app_config::remove_editor_scan_path(&path)
+}
+
+#[command]
+pub async fn check_update() -> Result<Option<updater::UpdateInfo>, String> {
+    let version = env!("CARGO_PKG_VERSION");
+    updater::check_for_update(version).await
+}
+
+#[command]
+pub async fn download_update(app: AppHandle, download_url: String, file_name: String) -> Result<(), String> {
+    updater::download_and_install(app, &download_url, &file_name).await
+}
+
+#[command]
+pub fn cancel_update_download() {
+    updater::cancel_download();
 }

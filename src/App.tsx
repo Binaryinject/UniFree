@@ -1,12 +1,15 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   ThemeProvider, createTheme, CssBaseline, Box, Tabs, Tab,
-  IconButton, Tooltip,
+  IconButton, Tooltip, Dialog, DialogTitle, DialogContent,
+  DialogActions, Button, Typography, LinearProgress,
 } from "@mui/material";
 import {
   ShieldCheck, Wrench, Info, Sun, Moon, Monitor, Certificate,
+  ArrowDown,
 } from "@phosphor-icons/react";
 import HubTab from "./components/HubTab";
 import LicenseTab from "./components/LicenseTab";
@@ -103,6 +106,11 @@ export default function App() {
 
   const clearLogs = useCallback(() => setLogs([]), []);
 
+  // Auto-update state
+  const [updateInfo, setUpdateInfo] = useState<{ version: string; downloadUrl: string; fileName: string } | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+
   // 共用状态 - 立即初始化，不等待后端
   const [licenseStatus, setLicenseStatus] = useState<string>("not_found");
   const [isAdmin, setIsAdmin] = useState(true); // 默认假设是管理员
@@ -111,7 +119,56 @@ export default function App() {
   useEffect(() => {
     checkLicenseStatus();
     checkAdminStatus();
+    checkForUpdate();
   }, []);
+
+  async function checkForUpdate() {
+    try {
+      const info = await invoke<{ version: string; download_url: string; file_name: string } | null>("check_update");
+      if (info) {
+        setUpdateInfo({
+          version: info.version,
+          downloadUrl: info.download_url,
+          fileName: info.file_name,
+        });
+      }
+    } catch (e) {
+      console.error("Update check failed:", e);
+    }
+  }
+
+  async function handleDownloadUpdate() {
+    if (!updateInfo) return;
+    setDownloading(true);
+    setDownloadProgress(0);
+
+    const unlisten = await listen<{ downloaded: number; total: number; percent: number }>("update-progress", (event) => {
+      setDownloadProgress(event.payload.percent);
+    });
+
+    try {
+      await invoke("download_update", {
+        downloadUrl: updateInfo.downloadUrl,
+        fileName: updateInfo.fileName,
+      });
+    } catch (e) {
+      const msg = String(e);
+      if (msg !== "Download cancelled") {
+        console.error("Download failed:", e);
+      }
+    } finally {
+      unlisten();
+      setDownloading(false);
+    }
+  }
+
+  async function handleCancelDownload() {
+    try {
+      await invoke("cancel_update_download");
+    } catch (e) {
+      console.error("Cancel failed:", e);
+    }
+  }
 
   async function checkLicenseStatus() {
     try {
@@ -156,6 +213,42 @@ export default function App() {
         </Box>
         <LogPanel logs={logs} clearLogs={clearLogs} />
       </Box>
+
+      <Dialog open={!!updateInfo} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <ArrowDown size={20} />
+          {t("update.available")} v{updateInfo?.version}
+        </DialogTitle>
+        <DialogContent>
+          {downloading ? (
+            <Box sx={{ mt: 1 }}>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                {t("update.downloading")}
+              </Typography>
+              <LinearProgress variant="determinate" value={downloadProgress} />
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: "block" }}>
+                {Math.round(downloadProgress)}%
+              </Typography>
+            </Box>
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              {t("update.install_hint")}
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          {downloading ? (
+            <Button onClick={handleCancelDownload} color="error">{t("update.cancel")}</Button>
+          ) : (
+            <>
+              <Button onClick={() => setUpdateInfo(null)}>{t("update.skip")}</Button>
+              <Button variant="contained" onClick={handleDownloadUpdate}>
+                {t("update.download")}
+              </Button>
+            </>
+          )}
+        </DialogActions>
+      </Dialog>
     </ThemeProvider>
   );
 }

@@ -1,4 +1,4 @@
-# UniFree 2.3.1
+# UniFree 2.4.0
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -115,9 +115,14 @@ MIT License - See [LICENSE](LICENSE) for details
 
 ---
 
-**UniFree 2.3.1** - Unity License Freedom Tool
+**UniFree 2.4.0** - Unity License Freedom Tool
 
 ## Changelog
+
+### v2.4.0
+- Added auto-update: checks GitHub releases for new versions on startup
+- Download progress bar with cancel support
+- Silent NSIS installation after download
 
 ### v2.3.1
 - Removed license type selection (Enterprise/Industrial/Plus) from UI
