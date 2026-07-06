@@ -6,6 +6,7 @@ mod license;
 mod patcher;
 mod scanner;
 mod ulf_signer;
+mod updater;
 
 pub fn run() {
     tauri::Builder::default()
@@ -35,7 +36,9 @@ pub fn run() {
             commands::get_editor_scan_paths,
             commands::add_editor_scan_path,
             commands::remove_editor_scan_path,
-
+            commands::check_update,
+            commands::download_update,
+            commands::cancel_update_download,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

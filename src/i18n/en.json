@@ -99,5 +99,13 @@
     "author": "Author",
     "description": "Unity License Patcher",
     "github": "GitHub"
+  },
+  "update": {
+    "available": "New version available",
+    "download": "Download & Install",
+    "downloading": "Downloading update...",
+    "install_hint": "App will restart after installation",
+    "skip": "Skip",
+    "cancel": "Cancel"
   }
 }

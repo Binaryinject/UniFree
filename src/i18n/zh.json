@@ -99,5 +99,13 @@
     "author": "作者",
     "description": "Unity 许可证补丁工具",
     "github": "项目主页"
+  },
+  "update": {
+    "available": "发现新版本",
+    "download": "下载并安装",
+    "downloading": "正在下载更新...",
+    "install_hint": "安装完成后应用将自动重启",
+    "skip": "跳过",
+    "cancel": "取消"
   }
 }
