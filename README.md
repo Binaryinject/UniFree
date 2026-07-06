@@ -1,4 +1,4 @@
-# UniFree 2.3.0
+# UniFree 2.3.1
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -10,9 +10,7 @@
 - **Unity Editor Patching** - Version-aware DLL replacement to bypass signature verification
   - Unity 6000+: replaces `Unity.Licensing.EntitlementResolver.dll`
   - Unity 2019-2022: replaces `System.Security.Cryptography.Xml.dll`
-- **License Generation** - Generate RSA-signed license files from hardware info
-  - Supports Pro / Plus / Enterprise / Industrial license types with distinct feature sets
-  - Real RSA-SHA1 signing (random or user-provided PEM private key)
+- **License Generation** - Generate RSA-signed Unity Pro license files from hardware info
 - **Custom Paths** - Support custom Hub and Editor scan directories
 - **Editor Refresh** - Refresh button to re-scan installed editors
 - **Modern GUI** - Built with Tauri 2.0 + React + Material-UI
@@ -59,18 +57,11 @@ Version-aware DLL replacement that bypasses `ValidateSignature`:
 ### License Generation
 
 1. Collects hardware info (Windows Product ID, Disk Serial, BIOS Serial, MAC Address)
-2. Generates ALF (Activation License File) with real machine bindings and product-specific features
-3. Signs with RSA-SHA1 using a random or user-provided private key
+2. Generates ALF (Activation License File) with real machine bindings and Pro features
+3. Signs with RSA-SHA1 using a random private key
 4. Writes to `C:\ProgramData\Unity\Unity_lic.ulf`
 
-**License Types & Features:**
-
-| License | Features |
-|---------|----------|
-| Unity Pro | 0, 2, 4, 9, 13, 20, 21, 22, 30, 39, 40, 60, 65 |
-| Unity Plus | 0, 2, 4, 9, 13, 22, 39, 40, 60 |
-| Unity Enterprise | Pro + 70 |
-| Unity Industrial | Enterprise + 80 |
+**Unity Pro Features:** 0, 2, 4, 9, 13, 20, 21, 22, 30, 39, 40, 60, 65
 
 ## What Gets Modified
 
@@ -124,4 +115,13 @@ MIT License - See [LICENSE](LICENSE) for details
 
 ---
 
-**UniFree 2.3.0** - Unity License Freedom Tool
+**UniFree 2.3.1** - Unity License Freedom Tool
+
+## Changelog
+
+### v2.3.1
+- Removed license type selection (Enterprise/Industrial/Plus) from UI
+- Simplified to Unity Pro only - Unity Hub's Licensing Client does not support Enterprise/Industry types
+- Removed custom RSA PEM key input (auto-generates random key)
+- Replaced Hub's `System.Security.Cryptography.Xml.dll` for signature bypass
+- Restored Hub's Licensing Client for proper license detection

@@ -141,21 +141,16 @@ pub fn get_hub_status(_resources_path: &str) -> String {
         None => return "error".into(),
     };
 
-    // 检查是否存在备份文件（表示已补丁）
-    let asar_bak = resources_path.join("app.asar.bak");
-    if asar_bak.exists() {
+    // 检查 Hub 的 XML DLL 是否已补丁
+    let hub_dir = resources_path.parent().unwrap_or(resources_path);
+    let xml_dll_bak = hub_dir.join("UnityLicensingClient_V1").join("System.Security.Cryptography.Xml.dll.bak");
+    if xml_dll_bak.exists() {
         return "patched".into();
     }
 
-    // 检查 asar 中是否已补丁
-    let config_status = get_hub_config_status();
-    if config_status == "not_found" {
-        return "not_found".into();
-    }
-    if config_status == "error" {
-        return "error".into();
-    }
-    if config_status == "patched" || config_status == "patched_no_backup" {
+    // 检查 asar 是否已备份（兼容旧版本）
+    let asar_bak = resources_path.join("app.asar.bak");
+    if asar_bak.exists() {
         return "patched".into();
     }
 
@@ -168,42 +163,18 @@ pub fn get_hub_config_status() -> String {
         Some(p) => p,
         None => return "error".into(),
     };
-    let app_folder = resources_path.join("app");
-    let bak_path = asar_path.with_extension("asar.bak");
 
-    // 如果 app 目录存在且 asar 已备份，检查 app 目录中的补丁
-    if app_folder.exists() && bak_path.exists() {
-        // 检查 app 目录中的 JS 文件
-        return match check_patched_in_dir(&app_folder) {
-            true => "patched".into(),
-            false => "patched_no_backup".into(), // app存在但没bak（不应该发生）
-        };
+    // 检查 Hub 的 XML DLL 是否已补丁
+    let hub_dir = resources_path.parent().unwrap_or(resources_path);
+    let xml_dll_bak = hub_dir.join("UnityLicensingClient_V1").join("System.Security.Cryptography.Xml.dll.bak");
+    if xml_dll_bak.exists() {
+        return "patched".into();
     }
 
-    // 如果 asar 文件存在，检查其中的内容
-    if asar_path.exists() {
-        let asar_data = match fs::read(&asar_path) {
-            Ok(d) => d,
-            Err(_) => return "error".into(),
-        };
-
-        let asar = match asar::AsarReader::new(&asar_data, None) {
-            Ok(a) => a,
-            Err(_) => return "error".into(),
-        };
-
-        for (path, file) in asar.files() {
-            let path_str = path.to_string_lossy();
-            if path_str.ends_with(".js") {
-                let content = String::from_utf8_lossy(file.data());
-                if content.contains("return true; // patched by unifree") ||
-                   content.contains("return; // patched by unifree") ||
-                   content.contains("DisableSignInRequired]: true,") ||
-                   content.contains("DisableAutoUpdate]: true,") {
-                    return "patched".into();
-                }
-            }
-        }
+    // 兼容旧版本：检查 asar 备份
+    let asar_bak = resources_path.join("app.asar.bak");
+    if asar_bak.exists() {
+        return "patched".into();
     }
 
     "original".into()
@@ -229,29 +200,6 @@ fn replace_method_body(content: &str, method_signature: &str, new_body: &str) ->
     if end_pos == 0 { return None; }
     let old_body = &after[..end_pos];
     Some(content.replace(old_body, new_body))
-}
-
-/// 递归检查目录中的JS文件是否包含补丁标记
-fn check_patched_in_dir(dir: &Path) -> bool {
-    let Ok(entries) = fs::read_dir(dir) else { return false };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            if check_patched_in_dir(&path) {
-                return true;
-            }
-        } else if path.extension().map_or(false, |e| e == "js") {
-            if let Ok(content) = fs::read_to_string(&path) {
-                if content.contains("return true; // patched by unifree") ||
-                   content.contains("return; // patched by unifree") ||
-                   content.contains("DisableSignInRequired]: true,") ||
-                   content.contains("DisableAutoUpdate]: true,") {
-                    return true;
-                }
-            }
-        }
-    }
-    false
 }
 
 /// Patch Hub: 修改asar中的JS代码绕过许可证验证 (UniHacker方法)
@@ -319,22 +267,10 @@ pub fn patch_hub(_resources_path: &str, disable_signin: bool, disable_update: bo
                     eprintln!("  ✓ Patched licenseQueryService.isLicenseValid in {}", path_str);
                     patched_files += 1;
                 }
-                // 补丁 getLicense: 返回假的 Unity Pro 许可证
-                if let Some(patched) = replace_method_body(&modified, "async getLicense()", "async getLicense() {\n\t\t\t\treturn [{ id: 'unifree-license', product: 'Unity Pro', licenseType: 'ULF', valid: true, label: 'Unity Pro', startDate: '2024-01-01', expirationDate: '2099-12-31' }];\n\t\t\t}") {
-                    modified = patched;
-                    eprintln!("  ✓ Patched licenseQueryService.getLicense in {}", path_str);
-                    patched_files += 1;
-                }
+                // 不再补丁 getLicense，让 Hub 自己读取 ULF 文件
             }
 
-            // 补丁 licensingSdk: 禁用初始化
-            if file_name.starts_with("licensingSdk") {
-                if let Some(patched) = replace_method_body(&modified, "async init()", "async init() {\n\t\treturn; // patched by unifree\n\t}") {
-                    modified = patched;
-                    eprintln!("  ✓ Patched init in {}", path_str);
-                    patched_files += 1;
-                }
-            }
+            // 不再补丁 licensingSdk.init()，让 Hub 正常初始化
 
             // 补丁翻译键: NO_LICENSE_TEXT -> NO_LICENSE_ACTIVATED
             if modified.contains("NO_LICENSE_TEXT") {
@@ -380,23 +316,41 @@ pub fn patch_hub(_resources_path: &str, disable_signin: bool, disable_update: bo
         eprintln!("✓ Removed app.asar (backup already exists)");
     }
 
-    // 6. 禁用 Licensing Client（防止无限网络请求）
-    eprintln!("Disabling Licensing Client...");
+    // 6. 恢复 Licensing Client（如果被禁用）
+    eprintln!("Checking Licensing Client...");
     let hub_dir = resources_path.parent().ok_or("Cannot get Hub directory")?;
-    let licensing_client_exe = hub_dir.join("UnityLicensingClient_V1").join("Unity.Licensing.Client.exe");
-    let licensing_client_bak = hub_dir.join("UnityLicensingClient_V1").join("Unity.Licensing.Client.exe.bak");
+    let licensing_dir = hub_dir.join("UnityLicensingClient_V1");
+    let licensing_client_exe = licensing_dir.join("Unity.Licensing.Client.exe");
+    let licensing_client_bak = licensing_dir.join("Unity.Licensing.Client.exe.bak");
 
-    if licensing_client_exe.exists() {
-        if licensing_client_bak.exists() {
-            fs::remove_file(&licensing_client_bak).map_err(|e| format!("Failed to remove old backup: {}", e))?;
-        }
-        fs::rename(&licensing_client_exe, &licensing_client_bak).map_err(|e| format!("Failed to rename Licensing Client: {}", e))?;
-        eprintln!("✓ Disabled Licensing Client (renamed to .bak)");
-    } else if licensing_client_bak.exists() {
-        eprintln!("✓ Licensing Client already disabled");
+    if !licensing_client_exe.exists() && licensing_client_bak.exists() {
+        // 恢复 Licensing Client
+        fs::rename(&licensing_client_bak, &licensing_client_exe).map_err(|e| format!("Failed to restore Licensing Client: {}", e))?;
+        eprintln!("✓ Restored Licensing Client");
+    } else if licensing_client_exe.exists() {
+        eprintln!("✓ Licensing Client already exists");
+    } else {
+        eprintln!("⚠ Licensing Client not found");
     }
 
-    // 7. 更新本地 hubConfig.json
+    // 7. 替换 Hub 的 XML DLL 跳过签名验证
+    eprintln!("Replacing Hub XML DLL...");
+    let xml_dll_path = licensing_dir.join("System.Security.Cryptography.Xml.dll");
+    let xml_dll_bak = licensing_dir.join("System.Security.Cryptography.Xml.dll.bak");
+
+    if xml_dll_path.exists() {
+        if !xml_dll_bak.exists() {
+            fs::copy(&xml_dll_path, &xml_dll_bak).map_err(|e| format!("Failed to backup XML DLL: {}", e))?;
+            eprintln!("✓ Backed up original XML DLL");
+        }
+        let patched_dll = include_bytes!("../resources/win/System.Security.Cryptography.Xml.dll");
+        fs::write(&xml_dll_path, patched_dll).map_err(|e| format!("Failed to write patched XML DLL: {}", e))?;
+        eprintln!("✓ Replaced System.Security.Cryptography.Xml.dll");
+    } else {
+        eprintln!("⚠ Hub XML DLL not found at: {}", xml_dll_path.display());
+    }
+
+    // 8. 更新本地 hubConfig.json
     eprintln!("Updating local hubConfig.json...");
     if let Err(e) = crate::config_patcher::update_hub_config(disable_signin, disable_update) {
         eprintln!("⚠ Warning: Failed to update hubConfig.json: {}", e);
@@ -404,7 +358,7 @@ pub fn patch_hub(_resources_path: &str, disable_signin: bool, disable_update: bo
         eprintln!("✓ hubConfig.json updated");
     }
 
-    Ok(format!("Hub patched: {} files modified, app folder created, Licensing Client disabled", patched_files))
+    Ok(format!("Hub patched: {} files modified, app folder created, XML DLL replaced", patched_files))
 }
 
 /// 递归复制目录
@@ -444,19 +398,30 @@ pub fn restore_hub(_resources_path: &str) -> Result<String, String> {
         fs::rename(&asar_bak, &asar_path).map_err(|e| format!("Failed to restore asar: {}", e))?;
     }
 
-    // 恢复 Licensing Client
+    // 恢复 Hub XML DLL 和 Licensing Client
     let hub_dir = resources_path.parent().ok_or("Cannot get Hub directory")?;
-    let licensing_client_exe = hub_dir.join("UnityLicensingClient_V1").join("Unity.Licensing.Client.exe");
-    let licensing_client_bak = hub_dir.join("UnityLicensingClient_V1").join("Unity.Licensing.Client.exe.bak");
+    let licensing_dir = hub_dir.join("UnityLicensingClient_V1");
+    let xml_dll_path = licensing_dir.join("System.Security.Cryptography.Xml.dll");
+    let xml_dll_bak = licensing_dir.join("System.Security.Cryptography.Xml.dll.bak");
 
-    if licensing_client_bak.exists() {
-        if licensing_client_exe.exists() {
-            fs::remove_file(&licensing_client_exe).map_err(|e| format!("Failed to remove backup: {}", e))?;
+    if xml_dll_bak.exists() {
+        if xml_dll_path.exists() {
+            fs::remove_file(&xml_dll_path).map_err(|e| format!("Failed to remove patched XML DLL: {}", e))?;
         }
-        fs::rename(&licensing_client_bak, &licensing_client_exe).map_err(|e| format!("Failed to restore Licensing Client: {}", e))?;
+        fs::rename(&xml_dll_bak, &xml_dll_path).map_err(|e| format!("Failed to restore XML DLL: {}", e))?;
+        eprintln!("✓ Restored original XML DLL");
     }
 
-    Ok("Restored: app.asar, Licensing Client".into())
+    // 恢复 Licensing Client（如果被禁用）
+    let licensing_client_exe = licensing_dir.join("Unity.Licensing.Client.exe");
+    let licensing_client_bak = licensing_dir.join("Unity.Licensing.Client.exe.bak");
+
+    if !licensing_client_exe.exists() && licensing_client_bak.exists() {
+        fs::rename(&licensing_client_bak, &licensing_client_exe).map_err(|e| format!("Failed to restore Licensing Client: {}", e))?;
+        eprintln!("✓ Restored Licensing Client");
+    }
+
+    Ok("Restored: app.asar, XML DLL, Licensing Client".into())
 }
 
 /// Check if a process is running by name
