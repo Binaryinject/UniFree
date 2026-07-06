@@ -1,4 +1,4 @@
-# UniFree 2.3.0
+# UniFree 2.3.1
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -124,4 +124,4 @@ MIT 许可证 - 详见 [LICENSE](LICENSE)
 
 ---
 
-**UniFree 2.3.0** - Unity 许可证自由工具
+**UniFree 2.3.1** - Unity 许可证自由工具
