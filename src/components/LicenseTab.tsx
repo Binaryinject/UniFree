@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Box, Button, Chip, CircularProgress, Typography, Paper, LinearProgress, Divider, Alert,
+  FormControl, InputLabel, MenuItem, Select, TextField,
 } from "@mui/material";
 import { Certificate, Warning } from "@phosphor-icons/react";
 import type { LogEntry } from "../App";
@@ -19,6 +20,8 @@ export default function LicenseTab({ addLog, licenseStatus, isAdmin, scanning, o
   const { t } = useTranslation();
   const [generatingLicense, setGeneratingLicense] = useState(false);
   const [licenseProgress, setLicenseProgress] = useState(0);
+  const [licenseProduct, setLicenseProduct] = useState("Unity Pro");
+  const [privateKey, setPrivateKey] = useState("");
 
   function statusChip(status: string) {
     const map: Record<string, { color: "success" | "info" | "default" | "warning"; label: string }> = {
@@ -52,7 +55,10 @@ export default function LicenseTab({ addLog, licenseStatus, isAdmin, scanning, o
 
       addLog("info", t("hub.generating_license"));
       setLicenseProgress(75);
-      const result = await invoke<string>("generate_license_direct");
+      const result = await invoke<string>("generate_license_direct", {
+        product: licenseProduct,
+        privateKeyPem: privateKey || null,
+      });
 
       setLicenseProgress(90);
       addLog("success", result);
@@ -115,6 +121,34 @@ export default function LicenseTab({ addLog, licenseStatus, isAdmin, scanning, o
         </Typography>
 
         <Divider sx={{ my: 1.5 }} />
+
+        <FormControl fullWidth size="small" sx={{ mb: 1.5 }}>
+          <InputLabel>{t("hub.license_type")}</InputLabel>
+          <Select
+            value={licenseProduct}
+            label={t("hub.license_type")}
+            onChange={(e) => setLicenseProduct(e.target.value)}
+            disabled={generatingLicense}
+          >
+            <MenuItem value="Unity Pro">Unity Pro</MenuItem>
+            <MenuItem value="Unity Plus">Unity Plus</MenuItem>
+            <MenuItem value="Unity Enterprise">Unity Enterprise</MenuItem>
+            <MenuItem value="Unity Industrial">Unity Industrial</MenuItem>
+          </Select>
+        </FormControl>
+
+        <TextField
+          fullWidth
+          size="small"
+          multiline
+          maxRows={4}
+          label={t("hub.rsa_private_key")}
+          placeholder={t("hub.rsa_private_key_placeholder")}
+          value={privateKey}
+          onChange={(e) => setPrivateKey(e.target.value)}
+          disabled={generatingLicense}
+          sx={{ mb: 1.5 }}
+        />
 
         <Button
           variant="contained"

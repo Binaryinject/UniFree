@@ -53,6 +53,45 @@ pub fn get_editor_dll_status(dll_path: &str) -> String {
     "original".into()
 }
 
+/// Extract Unity version year from DLL path
+/// e.g., "C:\...\2022.3.1f1\Editor\...\dll" -> "2022"
+/// e.g., "C:\...\6000.0.0f1\Editor\...\dll" -> "6000"
+fn extract_unity_version(dll_path: &str) -> Option<String> {
+    let path = Path::new(dll_path);
+    // Walk up parent directories to find version folder
+    let mut current = path.parent();
+    while let Some(dir) = current {
+        let folder_name = dir.file_name()?.to_string_lossy();
+        // Check if it starts with a version number
+        if folder_name.starts_with("20") || folder_name.starts_with("6") {
+            // Extract year prefix (e.g., "2022" from "2022.3.1f1" or "6000" from "6000.0.0f1")
+            let prefix = if folder_name.starts_with("6000") {
+                "6000".to_string()
+            } else {
+                folder_name.chars().take(4).collect::<String>()
+            };
+            return Some(prefix);
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+/// Get patched DLL for specific Unity version
+/// >= 6000: Unity.Licensing.EntitlementResolver.dll
+/// < 6000: System.Security.Cryptography.Xml.dll
+fn get_patched_dll_for_version(version: &str) -> Option<&'static [u8]> {
+    match version {
+        "2019" | "2020" | "2021" | "2022" => {
+            Some(include_bytes!("../resources/win/System.Security.Cryptography.Xml.dll"))
+        }
+        "6000" => {
+            Some(include_bytes!("../resources/win/Unity.Licensing.EntitlementResolver.dll"))
+        }
+        _ => None,
+    }
+}
+
 /// Patch EntitlementResolver.dll by replacing with pre-patched version
 /// The pre-patched DLL has ValidateSignature bypassed
 pub fn patch_entitlement_resolver(dll_path: &str) -> Result<String, String> {
@@ -61,16 +100,23 @@ pub fn patch_entitlement_resolver(dll_path: &str) -> Result<String, String> {
         return Err("DLL not found".into());
     }
 
+    // Extract Unity version from path
+    let version = extract_unity_version(dll_path)
+        .ok_or("Cannot detect Unity version from path")?;
+
+    // Get version-specific patched DLL
+    let patched_dll = get_patched_dll_for_version(&version)
+        .ok_or(format!("Unity {} is not supported. Supported versions: 2019, 2020, 2021, 2022, 6000", version))?;
+
     // 创建备份
     let bak_path = format!("{}.bak", dll_path);
     if !Path::new(&bak_path).exists() {
         fs::copy(path, &bak_path).map_err(|e| e.to_string())?;
     }
 
-    // 使用预编译的补丁DLL
-    let patched_dll = include_bytes!("../resources/win/Unity.Licensing.EntitlementResolver.dll");
+    // 写入版本对应的补丁DLL
     fs::write(path, patched_dll).map_err(|e| format!("Failed to write patched DLL: {}", e))?;
-    Ok("Patched: replaced with pre-patched DLL".into())
+    Ok(format!("Patched: replaced with pre-patched DLL for Unity {}", version))
 }
 
 /// Restore DLL from backup
@@ -84,6 +130,8 @@ pub fn restore(dll_path: &str) -> Result<String, String> {
     fs::remove_file(bak).map_err(|e| e.to_string())?;
     Ok(format!("Restored: {}", dll_path))
 }
+
+
 
 /// Check Hub status: "patched", "original", "not_found", "error"
 pub fn get_hub_status(_resources_path: &str) -> String {

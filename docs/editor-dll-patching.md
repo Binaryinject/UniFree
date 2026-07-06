@@ -141,10 +141,33 @@ pub fn patch_entitlement_resolver(dll_path: &str) -> Result<String, String> {
 
 ## 相关文件
 
-- `src-tauri/resources/win/Unity.Licensing.EntitlementResolver.dll` - 预编译补丁 DLL
-- `src-tauri/src/patcher.rs` - 补丁逻辑实现
+- `src-tauri/resources/win/{version}/Unity.Licensing.EntitlementResolver.dll` - 按版本组织的预编译补丁 DLL
+- `tools/patch-dll/` - 离线 DLL 二进制补丁工具
+- `src-tauri/src/patcher.rs` - 运行时替换逻辑（使用预编译 DLL）
 - `src/components/EditorTab.tsx` - 前端 UI
+
+## 版本特定 DLL 目录结构
+
+```
+src-tauri/resources/win/
+├── 2019/Unity.Licensing.EntitlementResolver.dll  (需离线补丁)
+├── 2020/Unity.Licensing.EntitlementResolver.dll  (需离线补丁)
+├── 2021/Unity.Licensing.EntitlementResolver.dll  (需离线补丁)
+├── 2022/Unity.Licensing.EntitlementResolver.dll  (需离线补丁)
+└── 6000/Unity.Licensing.EntitlementResolver.dll  (已预编译)
+```
+
+## 离线补丁工具
+
+使用 `tools/patch-dll/` 对 2019-2022 版本的 DLL 进行离线二进制补丁：
+
+```bash
+cd tools/patch-dll && cargo run
+```
+
+补丁后，运行时 `patch_entitlement_resolver()` 直接使用预编译 DLL 替换。
 
 ## 更新日志
 
+- 2026-07-04: 添加离线二进制补丁工具（tools/patch-dll），按版本组织 DLL
 - 2026-07-04: 简化为直接使用预编译 DLL，移除二进制补丁逻辑

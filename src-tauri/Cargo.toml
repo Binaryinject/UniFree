@@ -19,6 +19,10 @@ serde_json = "1"
 asar = "0.3"
 dirs = "5"
 alf-generator = { path = "../crates/alf-generator" }
+rsa = { version = "0.10.0-rc.18", features = ["sha1"] }
+sha1 = "0.11"
+rand = "0.10"
+base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [

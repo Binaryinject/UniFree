@@ -14,6 +14,18 @@ use std::os::windows::process::CommandExt;
 /// ALF 生成器
 pub struct AlfGenerator {
     unity_version: String,
+    product: String,
+}
+
+/// Get features for a given Unity product type
+fn features_for_product(product: &str) -> Vec<u32> {
+    match product {
+        "Unity Pro" => vec![0, 2, 4, 9, 13, 20, 21, 22, 30, 39, 40, 60, 65],
+        "Unity Plus" => vec![0, 2, 4, 9, 13, 22, 39, 40, 60],
+        "Unity Enterprise" => vec![0, 2, 4, 9, 13, 20, 21, 22, 30, 39, 40, 60, 65, 70],
+        "Unity Industrial" => vec![0, 2, 4, 9, 13, 20, 21, 22, 30, 39, 40, 60, 65, 70, 80],
+        _ => vec![0, 2, 4, 9, 13, 20, 21, 22, 30, 39, 40, 60, 65],
+    }
 }
 
 impl AlfGenerator {
@@ -21,12 +33,19 @@ impl AlfGenerator {
     pub fn new() -> Self {
         Self {
             unity_version: "2017.2.0".to_string(),
+            product: "Unity Pro".to_string(),
         }
     }
 
     /// 设置 Unity 版本
     pub fn with_unity_version(mut self, version: &str) -> Self {
         self.unity_version = version.to_string();
+        self
+    }
+
+    /// 设置产品类型
+    pub fn with_product(mut self, product: &str) -> Self {
+        self.product = product.to_string();
         self
     }
 
@@ -38,27 +57,23 @@ impl AlfGenerator {
 
         let mut alf_content = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<root>\n    <License id=\"Terms\">\n        <NoHardwareCheck Value=\"true\"/>\n        <MachineBindings>\n");
 
-        // 写入真实机器绑定
         for (key, value) in &bindings {
             alf_content.push_str(&format!("            <Binding Key=\"{}\" Value=\"{}\" />\n", key, value));
         }
 
         alf_content.push_str("        </MachineBindings>\n");
         alf_content.push_str(&format!("        <SerialHash Value=\"{}\" />\n", serial_hash));
-        
-        // Features
+
+        // Features (based on product type)
         alf_content.push_str("        <Features>\n");
-        let features = vec![0, 2, 4, 9, 13, 20, 21, 22, 30, 39, 40, 60, 65];
-        for f in &features {
+        for f in features_for_product(&self.product) {
             alf_content.push_str(&format!("            <Feature Value=\"{}\" />\n", f));
         }
         alf_content.push_str("        </Features>\n");
 
-        // DeveloperData
         let developer_data = self.generate_developer_data(&machine_id);
         alf_content.push_str(&format!("        <DeveloperData Value=\"{}\" />\n", developer_data));
 
-        // SerialMasked
         let serial_masked = self.generate_serial_masked();
         alf_content.push_str(&format!("        <SerialMasked Value=\"{}\" />\n", serial_masked));
 

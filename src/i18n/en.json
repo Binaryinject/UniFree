@@ -44,7 +44,10 @@
     "generating_license": "Signing and generating ULF file...",
     "license_generated_success": "Unity license generated and installed successfully",
     "license_generation_failed": "License generation failed",
-    "license_status": "License status"
+    "license_status": "License status",
+    "license_type": "License Type",
+    "rsa_private_key": "RSA Private Key (PEM)",
+    "rsa_private_key_placeholder": "Leave empty to generate a random key"
   },
   "editor": {
     "title": "Unity Editor Management",
@@ -57,7 +60,9 @@
     "download": "Download Unity Editor Archive",
     "hub_first": "Please patch Unity Hub in the Hub tab first",
     "custom_dirs": "Custom Scan Directories",
-    "add_dir": "Add Directory"
+    "add_dir": "Add Directory",
+    "version_not_supported": "Unity {version} is not supported. Supported: 2019, 2020, 2021, 2022, 6000",
+    "refresh": "Refresh"
   },
   "status": {
     "patched": "Patched",

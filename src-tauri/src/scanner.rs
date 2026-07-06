@@ -77,13 +77,26 @@ fn editor_exe_for_folder(folder: &PathBuf) -> PathBuf {
     { folder.join("Editor").join("Unity") }
 }
 
+/// Get the target DLL filename based on Unity version
+/// >= 6000: Unity.Licensing.EntitlementResolver.dll
+/// < 6000: System.Security.Cryptography.Xml.dll
+fn dll_name_for_version(version_folder: &str) -> &'static str {
+    if version_folder.starts_with("6") {
+        "Unity.Licensing.EntitlementResolver.dll"
+    } else {
+        "System.Security.Cryptography.Xml.dll"
+    }
+}
+
 fn dll_path_for_folder(folder: &PathBuf) -> PathBuf {
+    let version = folder.file_name().unwrap_or_default().to_string_lossy();
+    let dll_name = dll_name_for_version(&version);
     #[cfg(target_os = "windows")]
-    { folder.join("Editor").join("Data").join("Resources").join("Licensing").join("Client").join("Unity.Licensing.EntitlementResolver.dll") }
+    { folder.join("Editor").join("Data").join("Resources").join("Licensing").join("Client").join(dll_name) }
     #[cfg(target_os = "macos")]
-    { folder.join("Contents").join("Resources").join("Licensing").join("Client").join("Unity.Licensing.EntitlementResolver.dll") }
+    { folder.join("Contents").join("Resources").join("Licensing").join("Client").join(dll_name) }
     #[cfg(target_os = "linux")]
-    { folder.join("Editor").join("Data").join("Resources").join("Licensing").join("Client").join("Unity.Licensing.EntitlementResolver.dll") }
+    { folder.join("Editor").join("Data").join("Resources").join("Licensing").join("Client").join(dll_name) }
 }
 
 fn read_product_name(folder: &PathBuf) -> String {
@@ -260,22 +273,25 @@ fn build_editor_info(version: &str, location: Option<serde_json::Value>, arch: &
 
 fn derive_dll_from_exe(exe: &PathBuf) -> PathBuf {
     // exe is like: ...\2022.3.1f1\Editor\Unity.exe
-    // dll is:      ...\2022.3.1f1\Editor\Data\Resources\Licensing\Client\Unity.Licensing.EntitlementResolver.dll
+    // dll is:      ...\2022.3.1f1\Editor\Data\Resources\Licensing\Client\<dll_name>
     if let Some(editor_dir) = exe.parent() {
+        let version = editor_dir.parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let dll_name = dll_name_for_version(&version);
         #[cfg(target_os = "windows")]
-        { editor_dir.join("Data").join("Resources").join("Licensing").join("Client").join("Unity.Licensing.EntitlementResolver.dll") }
+        { editor_dir.join("Data").join("Resources").join("Licensing").join("Client").join(dll_name) }
         #[cfg(target_os = "macos")]
         {
-            // For macOS: exe is inside Unity.app/Contents/MacOS/Unity
-            // dll is at Unity.app/Contents/Resources/Licensing/Client/...
             if let Some(app_dir) = editor_dir.parent().and_then(|p| p.parent()) {
-                app_dir.join("Contents").join("Resources").join("Licensing").join("Client").join("Unity.Licensing.EntitlementResolver.dll")
+                app_dir.join("Contents").join("Resources").join("Licensing").join("Client").join(dll_name)
             } else {
                 PathBuf::new()
             }
         }
         #[cfg(target_os = "linux")]
-        { editor_dir.join("Data").join("Resources").join("Licensing").join("Client").join("Unity.Licensing.EntitlementResolver.dll") }
+        { editor_dir.join("Data").join("Resources").join("Licensing").join("Client").join(dll_name) }
     } else {
         PathBuf::new()
     }
