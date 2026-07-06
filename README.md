@@ -1,4 +1,4 @@
-# UniFree 2.2.0
+# UniFree 2.3.0
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -104,4 +104,4 @@ MIT License - See [LICENSE](LICENSE) for details
 
 ---
 
-**UniFree 2.2.0** - Unity License Freedom Tool
+**UniFree 2.3.0** - Unity License Freedom Tool
