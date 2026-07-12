@@ -19,7 +19,7 @@ fn base_install_path() -> PathBuf {
     }
 }
 
-fn hub_app_data() -> PathBuf {
+pub fn hub_app_data() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
         let appdata = std::env::var("APPDATA").unwrap_or_else(|_| {
@@ -332,63 +332,65 @@ pub fn hub_resources_path() -> PathBuf {
     }
 }
 
+/// 将 editors 按版本+架构去重后追加到 all
+fn dedup_extend(
+    editors: Vec<EditorInfo>,
+    all: &mut Vec<EditorInfo>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    for e in editors {
+        let key = format!("{}-{}", e.version, e.architecture);
+        if seen.insert(key) {
+            all.push(e);
+        }
+    }
+}
+
 pub fn scan_installed_editors() -> Vec<EditorInfo> {
-    let mut all = Vec::new();
+    let mut all: Vec<EditorInfo> = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
     // 1. Base install path
-    for e in scan_folder(&base_install_path()) {
-        let key = format!("{}-{}", e.version, e.architecture);
-        if seen.insert(key) { all.push(e); }
-    }
+    dedup_extend(scan_folder(&base_install_path()), &mut all, &mut seen);
 
     // 2. Secondary install path
     if let Some(secondary) = read_secondary_install_path() {
-        for e in scan_folder(&secondary) {
-            let key = format!("{}-{}", e.version, e.architecture);
-            if seen.insert(key) { all.push(e); }
-        }
+        dedup_extend(scan_folder(&secondary), &mut all, &mut seen);
     }
 
     // 3. Manually located editors from JSON storage
-    for e in read_located_editors() {
-        let key = format!("{}-{}", e.version, e.architecture);
-        if seen.insert(key) { all.push(e); }
-    }
+    dedup_extend(read_located_editors(), &mut all, &mut seen);
 
     // 4. Custom user-added scan paths
     for custom_path in crate::app_config::get_editor_scan_paths() {
         let path = PathBuf::from(&custom_path);
-        if path.exists() {
-            // Try as a direct version folder (e.g., D:\Unity\2022.3.1f1)
-            let folder_name = path.file_name().unwrap_or_default().to_string_lossy();
-            if is_version_folder(&folder_name) {
-                let exe = editor_exe_for_folder(&path);
-                if exe.exists() {
-                    let dll = dll_path_for_folder(&path);
-                    let dll_status = if dll.exists() {
-                        patcher::get_editor_dll_status(dll.to_string_lossy().as_ref())
-                    } else {
-                        "not_found".into()
-                    };
-                    let info = EditorInfo {
-                        version: folder_name.to_string(),
-                        path: exe.to_string_lossy().to_string(),
-                        dll_path: dll.to_string_lossy().to_string(),
-                        dll_status,
-                        product_name: read_product_name(&path),
-                        architecture: read_architecture(&path),
-                    };
-                    let key = format!("{}-{}", info.version, info.architecture);
-                    if seen.insert(key) { all.push(info); }
-                }
-            }
-            // Also scan as a parent directory containing version folders
-            for e in scan_folder(&path) {
-                let key = format!("{}-{}", e.version, e.architecture);
-                if seen.insert(key) { all.push(e); }
+        if !path.exists() {
+            continue;
+        }
+        // Try as a direct version folder (e.g., D:\Unity\2022.3.1f1)
+        let folder_name = path.file_name().unwrap_or_default().to_string_lossy();
+        if is_version_folder(&folder_name) {
+            let exe = editor_exe_for_folder(&path);
+            if exe.exists() {
+                let dll = dll_path_for_folder(&path);
+                let dll_status = if dll.exists() {
+                    patcher::get_editor_dll_status(dll.to_string_lossy().as_ref())
+                } else {
+                    "not_found".into()
+                };
+                let info = EditorInfo {
+                    version: folder_name.to_string(),
+                    path: exe.to_string_lossy().to_string(),
+                    dll_path: dll.to_string_lossy().to_string(),
+                    dll_status,
+                    product_name: read_product_name(&path),
+                    architecture: read_architecture(&path),
+                };
+                dedup_extend(vec![info], &mut all, &mut seen);
             }
         }
+        // Also scan as a parent directory containing version folders
+        dedup_extend(scan_folder(&path), &mut all, &mut seen);
     }
 
     all

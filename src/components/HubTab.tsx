@@ -2,11 +2,13 @@ import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  Alert, Box, Button, Chip, CircularProgress, Typography, Paper, Switch, FormControlLabel, Divider,
+  Alert, Box, Button, CircularProgress, Typography, Paper, Switch, FormControlLabel, Divider,
 } from "@mui/material";
 import { ShieldCheck, ArrowCounterClockwise, Warning, FolderOpen } from "@phosphor-icons/react";
 import type { LogEntry } from "../App";
+import StatusChip from "./StatusChip";
 import { clearEditorScanCache } from "./EditorTab";
+import { logLicenseResult, relaunchAsAdmin } from "../utils/actions";
 
 interface Props {
   addLog: (level: LogEntry["level"], message: string) => void;
@@ -87,33 +89,6 @@ export default function HubTab({ addLog, licenseStatus, isAdmin, onRefresh }: Pr
     }
   }
 
-  function statusChip(status: string) {
-    const map: Record<string, { color: "success" | "info" | "default" | "warning"; label: string }> = {
-      patched: { color: "success", label: t("status.patched") },
-      authorized: { color: "success", label: t("status.authorized") },
-      original: { color: "info", label: t("status.original") },
-      unauthorized: { color: "info", label: t("status.unauthorized") },
-      not_found: { color: "default", label: t("status.not_found") },
-      unknown: { color: "default", label: t("status.unknown") },
-      mismatch: { color: "warning", label: t("status.mismatch") },
-      missing_signature: { color: "warning", label: t("status.missing_signature") },
-      patched_no_backup: { color: "warning", label: t("status.patched_no_backup") },
-      partial: { color: "warning", label: t("status.partial") },
-    };
-    const s = map[status] ?? map.unknown;
-    return <Chip size="small" color={s.color} label={s.label} variant="outlined" />;
-  }
-
-  function logLicenseResult(result: string) {
-    if (result.startsWith("skipped_missing_signature:")) {
-      addLog("warn", t("log.license_skipped_missing_signature"));
-    } else if (result.startsWith("preserved_signed:")) {
-      addLog("success", t("log.license_preserved"));
-    } else {
-      addLog("success", t("log.license_copied"));
-    }
-  }
-
   async function doPatch() {
     try {
       const running = await invoke<boolean>("check_process", { name: "Unity Hub.exe" });
@@ -128,7 +103,7 @@ export default function HubTab({ addLog, licenseStatus, isAdmin, onRefresh }: Pr
     addLog("success", t("hub.patch_success"));
     try {
       const result = await invoke<string>("copy_license");
-      logLicenseResult(result);
+      logLicenseResult(t, addLog, result);
     } catch (e) {
       addLog("error", `${t("log.license_copy_failed")}: ${e}`);
     }
@@ -217,12 +192,7 @@ export default function HubTab({ addLog, licenseStatus, isAdmin, onRefresh }: Pr
   }
 
   async function handleRelaunchAsAdmin() {
-    try {
-      await invoke("relaunch_as_admin");
-      addLog("info", t("log.admin_relaunch_started"));
-    } catch (e) {
-      addLog("error", `${t("log.admin_relaunch_failed")}: ${e}`);
-    }
+    await relaunchAsAdmin(t, addLog);
   }
 
   const isPatched = hubStatus === "patched";
@@ -276,7 +246,7 @@ export default function HubTab({ addLog, licenseStatus, isAdmin, onRefresh }: Pr
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
           <ShieldCheck size={20} />
           <Typography variant="subtitle1" fontWeight={600}>{t("hub.title")}</Typography>
-          {statusChip(hubStatus)}
+          <StatusChip status={hubStatus} />
         </Box>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           {t("hub.desc")}
@@ -332,7 +302,7 @@ export default function HubTab({ addLog, licenseStatus, isAdmin, onRefresh }: Pr
             <Typography variant="body2">{t("hub.config_patch")}</Typography>
             <Typography variant="caption" color="text.secondary">{t("hub.config_patch_desc")}</Typography>
           </Box>
-          {statusChip(hubConfigStatus)}
+          <StatusChip status={hubConfigStatus} />
         </Box>
 
         <FormControlLabel

@@ -10,7 +10,7 @@ fn ulf_dir() -> PathBuf {
     { PathBuf::from("/usr/share/unity3d") }
 }
 
-fn ulf_path() -> PathBuf {
+pub fn ulf_path() -> PathBuf {
     ulf_dir().join("Unity_lic.ulf")
 }
 

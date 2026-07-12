@@ -2,35 +2,24 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  Box, Button, Chip, CircularProgress, Typography, Paper, LinearProgress, Divider, Alert,
+  Box, Button, CircularProgress, Typography, Paper, LinearProgress, Divider, Alert,
 } from "@mui/material";
 import { Certificate, Warning } from "@phosphor-icons/react";
 import type { LogEntry } from "../App";
+import StatusChip from "./StatusChip";
+import { relaunchAsAdmin } from "../utils/actions";
 
 interface Props {
   addLog: (level: LogEntry["level"], message: string) => void;
   licenseStatus: string;
   isAdmin: boolean;
-  scanning?: boolean;
   onRefresh: () => Promise<void>;
 }
 
-export default function LicenseTab({ addLog, licenseStatus, isAdmin, scanning, onRefresh }: Props) {
+export default function LicenseTab({ addLog, licenseStatus, isAdmin, onRefresh }: Props) {
   const { t } = useTranslation();
   const [generatingLicense, setGeneratingLicense] = useState(false);
   const [licenseProgress, setLicenseProgress] = useState(0);
-
-  function statusChip(status: string) {
-    const map: Record<string, { color: "success" | "info" | "default" | "warning"; label: string }> = {
-      authorized: { color: "success", label: t("status.authorized") },
-      unauthorized: { color: "info", label: t("status.unauthorized") },
-      not_found: { color: "default", label: t("status.not_found") },
-      unknown: { color: "default", label: t("status.unknown") },
-      missing_signature: { color: "warning", label: t("status.missing_signature") },
-    };
-    const s = map[status] ?? map.unknown;
-    return <Chip size="small" color={s.color} label={s.label} variant="outlined" />;
-  }
 
   async function handleGenerateLicense() {
     if (!isAdmin) {
@@ -78,14 +67,7 @@ export default function LicenseTab({ addLog, licenseStatus, isAdmin, scanning, o
     }
   }
 
-  async function handleRelaunchAsAdmin() {
-    try {
-      await invoke("relaunch_as_admin");
-      addLog("info", t("log.admin_relaunch_started"));
-    } catch (e) {
-      addLog("error", `${t("log.admin_relaunch_failed")}: ${e}`);
-    }
-  }
+  const handleRelaunch = () => { void relaunchAsAdmin(t, addLog); };
 
   return (
     <Box className="tab-content">
@@ -94,7 +76,7 @@ export default function LicenseTab({ addLog, licenseStatus, isAdmin, scanning, o
           severity="warning"
           icon={<Warning size={18} />}
           action={
-            <Button color="inherit" size="small" onClick={handleRelaunchAsAdmin}>
+            <Button color="inherit" size="small" onClick={handleRelaunch}>
               {t("app.run_as_admin")}
             </Button>
           }
@@ -108,7 +90,7 @@ export default function LicenseTab({ addLog, licenseStatus, isAdmin, scanning, o
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
           <Certificate size={20} />
           <Typography variant="subtitle1" fontWeight={600}>{t("hub.auto_license_title")}</Typography>
-          {scanning ? <CircularProgress size={16} /> : statusChip(licenseStatus)}
+          <StatusChip status={licenseStatus} />
         </Box>
 
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>

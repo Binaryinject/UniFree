@@ -29,13 +29,7 @@ function getSystemTheme(): "light" | "dark" {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-const lightTheme = createTheme({
-  palette: {
-    mode: "light",
-    primary: { main: "#1976d2" },
-    background: { default: "#f5f5f5", paper: "#ffffff" },
-    divider: "#e0e0e0",
-  },
+const baseTheme = createTheme({
   typography: {
     fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     fontSize: 13,
@@ -47,21 +41,21 @@ const lightTheme = createTheme({
   },
 });
 
-const darkTheme = createTheme({
+const lightTheme = createTheme(baseTheme, {
+  palette: {
+    mode: "light",
+    primary: { main: "#1976d2" },
+    background: { default: "#f5f5f5", paper: "#ffffff" },
+    divider: "#e0e0e0",
+  },
+});
+
+const darkTheme = createTheme(baseTheme, {
   palette: {
     mode: "dark",
     primary: { main: "#90caf9" },
     background: { default: "#121212", paper: "#1e1e1e" },
     divider: "#333333",
-  },
-  typography: {
-    fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-    fontSize: 13,
-  },
-  shape: { borderRadius: 8 },
-  components: {
-    MuiTab: { styleOverrides: { root: { minHeight: 36, textTransform: "none", fontSize: 13 } } },
-    MuiButton: { styleOverrides: { root: { textTransform: "none" } } },
   },
 });
 
@@ -122,7 +116,7 @@ export default function App() {
     checkForUpdate();
   }, []);
 
-  async function checkForUpdate() {
+  const checkForUpdate = useCallback(async () => {
     try {
       const info = await invoke<{ version: string; download_url: string; file_name: string } | null>("check_update");
       if (info) {
@@ -135,9 +129,9 @@ export default function App() {
     } catch (e) {
       console.error("Update check failed:", e);
     }
-  }
+  }, []);
 
-  async function handleDownloadUpdate() {
+  const handleDownloadUpdate = useCallback(async () => {
     if (!updateInfo) return;
     setDownloading(true);
     setDownloadProgress(0);
@@ -160,33 +154,33 @@ export default function App() {
       unlisten();
       setDownloading(false);
     }
-  }
+  }, [updateInfo]);
 
-  async function handleCancelDownload() {
+  const handleCancelDownload = useCallback(async () => {
     try {
       await invoke("cancel_update_download");
     } catch (e) {
       console.error("Cancel failed:", e);
     }
-  }
+  }, []);
 
-  async function checkLicenseStatus() {
+  const checkLicenseStatus = useCallback(async () => {
     try {
       const status = await invoke<string>("check_license_status");
       setLicenseStatus(status);
     } catch (e) {
       console.error("License check failed:", e);
     }
-  }
+  }, []);
 
-  async function checkAdminStatus() {
+  const checkAdminStatus = useCallback(async () => {
     try {
       const admin = await invoke<boolean>("check_admin");
       setIsAdmin(admin);
     } catch (e) {
       console.error("Admin check failed:", e);
     }
-  }
+  }, []);
 
   return (
     <ThemeProvider theme={theme}>

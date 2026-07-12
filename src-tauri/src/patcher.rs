@@ -2,27 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 // === Hub paths ===
-fn hub_resources_path() -> PathBuf {
-    // Check saved config first
-    if let Some(custom_path) = crate::app_config::get_hub_install_path() {
-        return custom_path.join("resources");
-    }
-
-    // Default paths
-    #[cfg(target_os = "windows")]
-    {
-        let pf = std::env::var("PROGRAMFILES").unwrap_or_else(|_| r"C:\Program Files".into());
-        PathBuf::from(pf).join("Unity Hub").join("resources")
-    }
-    #[cfg(target_os = "macos")]
-    {
-        PathBuf::from("/Applications/Unity Hub.app/Contents/Resources")
-    }
-    #[cfg(target_os = "linux")]
-    {
-        PathBuf::from("/usr/share/unityhub/resources")
-    }
-}
+// 复用 scanner 中唯一的 hub_resources_path 实现，避免重复
+use crate::scanner::hub_resources_path;
 
 fn hub_asar_path() -> PathBuf {
     hub_resources_path().join("app.asar")
@@ -133,40 +114,19 @@ pub fn restore(dll_path: &str) -> Result<String, String> {
 
 
 
-/// Check Hub status: "patched", "original", "not_found", "error"
-pub fn get_hub_status(_resources_path: &str) -> String {
+/// 检查 Hub 是否已被补丁（XML DLL 备份 / asar 备份两者任一存在即视为 patched）
+/// 返回 "patched" / "original" / "error"
+fn hub_patch_state() -> String {
     let asar_path = hub_asar_path();
     let resources_path = match asar_path.parent() {
         Some(p) => p,
         None => return "error".into(),
     };
 
-    // 检查 Hub 的 XML DLL 是否已补丁
     let hub_dir = resources_path.parent().unwrap_or(resources_path);
-    let xml_dll_bak = hub_dir.join("UnityLicensingClient_V1").join("System.Security.Cryptography.Xml.dll.bak");
-    if xml_dll_bak.exists() {
-        return "patched".into();
-    }
-
-    // 检查 asar 是否已备份（兼容旧版本）
-    let asar_bak = resources_path.join("app.asar.bak");
-    if asar_bak.exists() {
-        return "patched".into();
-    }
-
-    "original".into()
-}
-
-pub fn get_hub_config_status() -> String {
-    let asar_path = hub_asar_path();
-    let resources_path = match asar_path.parent() {
-        Some(p) => p,
-        None => return "error".into(),
-    };
-
-    // 检查 Hub 的 XML DLL 是否已补丁
-    let hub_dir = resources_path.parent().unwrap_or(resources_path);
-    let xml_dll_bak = hub_dir.join("UnityLicensingClient_V1").join("System.Security.Cryptography.Xml.dll.bak");
+    let xml_dll_bak = hub_dir
+        .join("UnityLicensingClient_V1")
+        .join("System.Security.Cryptography.Xml.dll.bak");
     if xml_dll_bak.exists() {
         return "patched".into();
     }
@@ -178,6 +138,15 @@ pub fn get_hub_config_status() -> String {
     }
 
     "original".into()
+}
+
+/// Check Hub status: "patched", "original", "error"
+pub fn get_hub_status() -> String {
+    hub_patch_state()
+}
+
+pub fn get_hub_config_status() -> String {
+    hub_patch_state()
 }
 
 /// 查找JS方法体并替换
@@ -205,7 +174,7 @@ fn replace_method_body(content: &str, method_signature: &str, new_body: &str) ->
 /// Patch Hub: 修改asar中的JS代码绕过许可证验证 (UniHacker方法)
 /// 提取asar到app目录，补丁JS文件，然后重命名asar为.bak
 /// Electron会在找不到app.asar时自动从app目录加载
-pub fn patch_hub(_resources_path: &str, disable_signin: bool, disable_update: bool) -> Result<String, String> {
+pub fn patch_hub(disable_signin: bool, disable_update: bool) -> Result<String, String> {
     let asar_path = hub_asar_path();
     if !asar_path.exists() {
         return Err("app.asar not found".into());
@@ -379,7 +348,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
 }
 
 /// Restore Hub from backup
-pub fn restore_hub(_resources_path: &str) -> Result<String, String> {
+pub fn restore_hub() -> Result<String, String> {
     let asar_path = hub_asar_path();
     let resources_path = asar_path.parent().ok_or("Cannot get resources path")?;
     let app_folder = resources_path.join("app");
