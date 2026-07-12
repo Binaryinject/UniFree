@@ -30,8 +30,7 @@ pub fn scan_unity_editors() -> Vec<EditorInfo> {
 
 #[command]
 pub fn check_hub_dll_status() -> String {
-    let res_path = scanner::hub_resources_path();
-    patcher::get_hub_status(&res_path.to_string_lossy())
+    patcher::get_hub_status()
 }
 
 #[command]
@@ -46,22 +45,18 @@ pub fn patch_editor_dll(dll_path: String) -> Result<String, String> {
 
 #[command]
 pub fn patch_hub(disable_signin: bool, disable_update: bool) -> Result<String, String> {
-    let res_path = scanner::hub_resources_path();
-    patcher::patch_hub(&res_path.to_string_lossy(), disable_signin, disable_update)
+    patcher::patch_hub(disable_signin, disable_update)
 }
 
 #[command]
 pub fn restore_hub() -> Result<String, String> {
-    let res_path = scanner::hub_resources_path();
-    patcher::restore_hub(&res_path.to_string_lossy())
+    patcher::restore_hub()
 }
 
 #[command]
 pub fn restore_dll(dll_path: String) -> Result<String, String> {
     patcher::restore(&dll_path)
 }
-
-
 
 #[command]
 pub fn copy_license() -> Result<String, String> {
@@ -201,7 +196,7 @@ pub fn generate_license_direct(product: String, private_key_pem: Option<String>)
     eprintln!("ALF generated at: {}", alf_path.display());
 
     // 2. 转为 ULF（用RSA密钥签名）
-    let ulf_path = std::path::PathBuf::from(r"C:\ProgramData\Unity\Unity_lic.ulf");
+    let ulf_path = license::ulf_path();
     let result = ulf_signer::sign_alf_to_ulf(&alf_path, &ulf_path, private_key_pem.as_deref())?;
 
     Ok(format!("License generated: {}", result))
@@ -225,12 +220,10 @@ pub async fn select_hub_path(app: tauri::AppHandle) -> Result<String, String> {
         .blocking_pick_file()
         .ok_or("No file selected")?;
 
-    let path = match file {
+    let exe_path = match file {
         FilePath::Path(p) => p,
         _ => return Err("Invalid file path".into()),
     };
-
-    let exe_path = path;
 
     // Verify it's Unity Hub.exe
     let exe_name = exe_path.file_name()

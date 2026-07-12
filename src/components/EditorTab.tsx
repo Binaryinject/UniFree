@@ -2,10 +2,12 @@ import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  Box, Button, Chip, CircularProgress, Typography, Paper, Alert, Link, IconButton, Divider, Tooltip,
+  Box, Button, CircularProgress, Typography, Paper, Alert, Link, IconButton, Divider, Tooltip,
 } from "@mui/material";
 import { Wrench, Warning, DownloadSimple, FolderOpen, Plus, Trash, ArrowClockwise } from "@phosphor-icons/react";
 import type { LogEntry } from "../App";
+import StatusChip from "./StatusChip";
+import { logLicenseResult } from "../utils/actions";
 
 interface EditorInfo {
   version: string;
@@ -93,28 +95,6 @@ export default function EditorTab({ addLog }: Props) {
     }
   }
 
-  function statusChip(status: string) {
-    const map: Record<string, { color: "success" | "info" | "default" | "warning"; label: string }> = {
-      patched: { color: "success", label: t("status.patched") },
-      original: { color: "info", label: t("status.original") },
-      not_found: { color: "default", label: t("status.not_found") },
-      unknown: { color: "default", label: t("status.unknown") },
-      patched_no_backup: { color: "warning", label: t("status.patched_no_backup") },
-    };
-    const s = map[status] ?? map.unknown;
-    return <Chip size="small" color={s.color} label={s.label} variant="outlined" sx={{ minWidth: 64 }} />;
-  }
-
-  function logLicenseResult(result: string) {
-    if (result.startsWith("skipped_missing_signature:")) {
-      addLog("warn", t("log.license_skipped_missing_signature"));
-    } else if (result.startsWith("preserved_signed:")) {
-      addLog("success", t("log.license_preserved"));
-    } else {
-      addLog("success", t("log.license_copied"));
-    }
-  }
-
   async function handleSingle(editor: EditorInfo, action: "patch" | "restore") {
     if (!hubPatched && action === "patch") {
       addLog("warn", t("editor.hub_first"));
@@ -133,7 +113,7 @@ export default function EditorTab({ addLog }: Props) {
         addLog("success", `[${editor.version}] ${t("editor.patch")} ✓`);
         try {
           const result = await invoke<string>("copy_license");
-          logLicenseResult(result);
+          logLicenseResult(t, addLog, result);
         } catch (le) {
           addLog("error", `${t("log.license_copy_failed")}: ${le}`);
         }
@@ -198,7 +178,7 @@ export default function EditorTab({ addLog }: Props) {
     if (action === "patch") {
       try {
         const result = await invoke<string>("copy_license");
-        logLicenseResult(result);
+        logLicenseResult(t, addLog, result);
       } catch (e) {
         addLog("error", `${t("log.license_copy_failed")}: ${e}`);
       }
@@ -331,7 +311,7 @@ export default function EditorTab({ addLog }: Props) {
                       {e.path}
                     </Typography>
                   </Box>
-                  {statusChip(e.dll_status)}
+                  <StatusChip status={e.dll_status} sx={{ minWidth: 64 }} />
                   <Button
                     size="small"
                     variant="contained"

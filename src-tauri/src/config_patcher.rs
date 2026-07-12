@@ -1,12 +1,9 @@
 use std::fs;
-use std::path::Path;
 use serde_json;
 
 /// 更新本地 hubConfig.json 文件
 pub fn update_hub_config(disable_signin: bool, disable_update: bool) -> Result<String, String> {
-    let hub_config_path = Path::new(&std::env::var("APPDATA").unwrap_or_else(|_| "C:\\Users\\Administrator\\AppData\\Roaming".into()))
-        .join("UnityHub")
-        .join("hubConfig.json");
+    let hub_config_path = crate::scanner::hub_app_data().join("hubConfig.json");
 
     if !hub_config_path.exists() {
         return Err(format!("hubConfig.json not found at: {}", hub_config_path.display()));
