@@ -159,19 +159,44 @@ pub async fn download_and_install(
         .map_err(|e| format!("Flush error: {}", e))?;
     drop(file);
 
-    // Run installer silently
+    // Run installer silently, wait for it, then relaunch the app.
+    //
+    // Tauri NSIS installer in /S mode does not relaunch the app on its own,
+    // and the running UniFree process would hold a lock on the exe — so we
+    // spawn a detached helper cmd that:
+    //   1. waits ~2s for the current app to exit,
+    //   2. runs the silent installer and waits for it to finish,
+    //   3. launches the freshly installed exe,
+    // then we call app.exit(0) to release the file lock immediately.
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        std::process::Command::new(&file_path)
-            .arg("/S")
+
+        let exe_path = std::env::current_exe()
+            .map_err(|e| format!("Failed to resolve current exe: {}", e))?;
+        let installer_str = file_path.display().to_string();
+        let exe_str = exe_path.display().to_string();
+
+        // Quotes are important: paths may contain spaces.
+        let cmd_line = format!(
+            "timeout /t 2 /nobreak >nul & start \"unifree-installer\" /wait \"{installer}\" /S & start \"unifree-app\" \"{exe}\"",
+            installer = installer_str,
+            exe = exe_str,
+        );
+
+        std::process::Command::new("cmd")
+            .args(["/C", &cmd_line])
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn()
             .map_err(|e| format!("Failed to start installer: {}", e))?;
+
+        // Release file lock so installer can replace the exe.
+        app.exit(0);
     }
 
     #[cfg(not(target_os = "windows"))]
     {
+        let _ = app; // avoid unused warning on non-Windows.
         return Err("Silent install is only supported on Windows".into());
     }
 

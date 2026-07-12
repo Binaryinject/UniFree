@@ -29,19 +29,22 @@ function getSystemTheme(): "light" | "dark" {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-const baseTheme = createTheme({
-  typography: {
-    fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-    fontSize: 13,
-  },
-  shape: { borderRadius: 8 },
-  components: {
-    MuiTab: { styleOverrides: { root: { minHeight: 36, textTransform: "none", fontSize: 13 } } },
-    MuiButton: { styleOverrides: { root: { textTransform: "none" } } },
-  },
-});
+function baseThemeOptions() {
+  return {
+    typography: {
+      fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      fontSize: 13,
+    },
+    shape: { borderRadius: 8 },
+    components: {
+      MuiTab: { styleOverrides: { root: { minHeight: 36, textTransform: "none", fontSize: 13 } } },
+      MuiButton: { styleOverrides: { root: { textTransform: "none" } } },
+    },
+  };
+}
 
-const lightTheme = createTheme(baseTheme, {
+const lightTheme = createTheme({
+  ...baseThemeOptions(),
   palette: {
     mode: "light",
     primary: { main: "#1976d2" },
@@ -50,7 +53,8 @@ const lightTheme = createTheme(baseTheme, {
   },
 });
 
-const darkTheme = createTheme(baseTheme, {
+const darkTheme = createTheme({
+  ...baseThemeOptions(),
   palette: {
     mode: "dark",
     primary: { main: "#90caf9" },
