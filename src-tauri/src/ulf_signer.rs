@@ -81,6 +81,12 @@ pub fn sign_alf_to_ulf(
 
     let ulf_content = sign_xml(&alf_content, &private_key)?;
 
+    // 确保父目录存在
+    if let Some(parent) = ulf_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create ULF directory: {}", e))?;
+    }
+
     fs::write(ulf_path, &ulf_content)
         .map_err(|e| format!("Failed to write ULF: {}", e))?;
 
