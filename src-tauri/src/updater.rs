@@ -178,8 +178,9 @@ pub async fn download_and_install(
         let exe_str = exe_path.display().to_string();
 
         // Quotes are important: paths may contain spaces.
+        // Note: start "title" "command" - first quoted arg is window title, use "" for empty title
         let cmd_line = format!(
-            "timeout /t 2 /nobreak >nul & start \"unifree-installer\" /wait \"{installer}\" /S & start \"unifree-app\" \"{exe}\"",
+            "timeout /t 2 /nobreak >nul & start \"\" /wait \"{installer}\" /S & start \"\" \"{exe}\"",
             installer = installer_str,
             exe = exe_str,
         );
