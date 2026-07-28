@@ -1,4 +1,4 @@
-# UniFree 2.5.0
+# UniFree 2.5.1
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -120,15 +120,18 @@ MIT 许可证 - 详见 [LICENSE](LICENSE)
 
 ---
 
-**UniFree 2.5.0** - Unity 许可证自由工具
+**UniFree 2.5.1** - Unity 许可证自由工具
 
 ## 更新日志
+
+### v2.5.1
+- 修复自动更新：使用 `ping` 延时 + `&&` 链接代替 `timeout` + `&`，确保安装器在应用完全退出后运行
+- NSIS 安装器直接运行而非通过 `start /wait`，进程等待更可靠
 
 ### v2.5.0
 - **Native AOT 二进制补丁支持 Unity 6000.7+** — 字节级锚点补丁绕过 `Unity.Licensing.Client.exe` 的许可证签名验证
 - 4 个精准补丁：证书链绕过、ValidateSignature 门控跳过、LABEL_14 证书检查绕过、BCrypt/NCrypt NTSTATUS 绕过
 - 基于锚点的模式匹配，同 Unity 发布线内跨小版本兼容
-- 每次补丁前自动从备份恢复，确保干净状态
 
 ### v2.4.0
 - 新增自动更新：启动时检查 GitHub releases 是否有新版本

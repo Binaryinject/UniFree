@@ -1,0 +1,10 @@
+{
+  "$schema": "https://mimo.xiaomi.com/mimocode/config.json",
+  "mcp": {
+    "ida": {
+      "type": "local",
+      "command": ["C:\\Program Files\\IDA Professional 9.3\\ida-mcp.exe"],
+      "timeout": 15000
+    }
+  }
+}

@@ -1,4 +1,4 @@
-# UniFree 2.5.0
+# UniFree 2.5.1
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -120,15 +120,18 @@ MIT License - See [LICENSE](LICENSE) for details
 
 ---
 
-**UniFree 2.5.0** - Unity License Freedom Tool
+**UniFree 2.5.1** - Unity License Freedom Tool
 
 ## Changelog
+
+### v2.5.1
+- Fix updater: use `ping` delay and `&&` chaining instead of `timeout` + `&` to ensure installer runs after app fully exits
+- Run NSIS installer directly instead of via `start /wait` for reliable process waiting
 
 ### v2.5.0
 - **Native AOT binary patching for Unity 6000.7+** — byte-level anchor-based patches to bypass license signature verification in `Unity.Licensing.Client.exe`
 - 4 precision patches: cert chain bypass, ValidateSignature gate skip, LABEL_14 cert check bypass, BCrypt/NCrypt NTSTATUS bypass
 - Anchor-based pattern matching for cross-minor-version compatibility within the same Unity release line
-- Automatic restore from backup before each patch, ensuring clean state
 
 ### v2.4.0
 - Added auto-update: checks GitHub releases for new versions on startup

@@ -1,0 +1,3 @@
+display_name: MIMO Token Usage
+short_description: Check Xiaomi MIMO token plan usage and remaining quota
+default_prompt: Check my MIMO token usage
