@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 // === Hub paths ===
@@ -73,9 +74,107 @@ fn get_patched_dll_for_version(version: &str) -> Option<&'static [u8]> {
     }
 }
 
+/// 通配符字节搜索，返回文件偏移
+fn find_pattern(data: &[u8], pattern: &str) -> Option<u64> {
+    find_pattern_at(data, pattern).map(|o| o as u64)
+}
+
+/// 在切片中搜索通配符字节模式，返回切片内偏移
+fn find_pattern_at(data: &[u8], pattern: &str) -> Option<usize> {
+    let parts: Vec<&str> = pattern.split_whitespace().collect();
+    let bytes: Vec<Option<u8>> = parts
+        .iter()
+        .map(|b| {
+            if *b == "??" {
+                None
+            } else {
+                Some(u8::from_str_radix(b, 16).unwrap())
+            }
+        })
+        .collect();
+
+    'outer: for i in 0..=data.len().saturating_sub(bytes.len()) {
+        for (j, b) in bytes.iter().enumerate() {
+            if let Some(expected) = b {
+                if data[i + j] != *expected {
+                    continue 'outer;
+                }
+            }
+        }
+        return Some(i);
+    }
+    None
+}
+
+/// 对 Native AOT 编译的 Unity.Licensing.Client.exe (Unity >= 6000.7) 做字节级补丁，
+/// 绕过许可证 XML 数字签名验证。通过锚点+模式匹配定位，兼容小版本更新。
+pub fn patch_licensing_client(exe_path: &str) -> Result<String, String> {
+    let path = Path::new(exe_path);
+    if !path.exists() {
+        return Err("Unity.Licensing.Client.exe not found".into());
+    }
+
+    // 首次创建备份，之后每次从备份恢复确保干净状态
+    let bak = format!("{}.bak", exe_path);
+    let bak_path = Path::new(&bak);
+    if !bak_path.exists() {
+        fs::copy(path, &bak).map_err(|e| e.to_string())?;
+    }
+    fs::copy(bak_path, path).map_err(|e| format!("Failed to restore from backup: {}", e))?;
+
+    let data = fs::read(path).map_err(|e| format!("Failed to read: {}", e))?;
+    let mut patches: Vec<(u64, Vec<u8>)> = Vec::new();
+
+    // P1: CertVerifyCertificateChainPolicy → 始终返回成功
+    // 锚点: CERT_CHAIN_POLICY_PARA.cbSize = 16
+    let p1 = find_pattern(&data, "C7 44 24 ?? 10 00 00 00 89 54 24 ??")
+        .ok_or("P1: cert chain anchor not found")? + 0x34;
+    patches.push((p1, vec![0xB8, 0x01, 0x01, 0x00, 0x00, 0xEB, 0x13, 0x90, 0x90]));
+
+    // P2: ValidateSignature 签名验证门控 jz → jmp
+    // 直接匹配门控指令及其后续上下文，确保唯一命中。
+    //   test edx,r8d; jz +??; lea r8,[rsp+X]; mov rdx,rax; lea rcx,[rip+...]
+    let p2 = find_pattern(&data,
+        "44 85 C2 74 ?? 4C 8D 44 24 ?? 48 8B D0 48 8D 0D"
+    ).ok_or("P2: ValidateSignature gate not found")? + 3; // +3 → the 0x74 byte
+    patches.push((p2, vec![0xEB, data[p2 as usize + 1]]));
+
+    // P3: sub_14042ADC0 → 始终返回 1（LABEL_14 证书信任检查）
+    // 延长锚点包含第二个 call 的准备指令，避免函数签名相同导致的误匹配。
+    let p3 = find_pattern(&data,
+        "56 53 48 83 EC 28 48 8B D9 48 8B F2 48 8B CB E8 ?? ?? ?? ?? 85 C0 74 ?? 48 8B CB 48 8B D6"
+    ).ok_or("P3: sub_14042ADC0 not found")?;
+    patches.push((p3, vec![0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3]));
+
+    // P4 (可选): BCrypt/NCrypt NTSTATUS→bool → 始终 true，纵深防御
+    for (pat, rep) in [
+        ("85 DB 0F 94 C0 0F B6 C0", [0xB8u8, 0x01, 0x00, 0x00, 0x00, 0x90, 0x90, 0x90]),
+        ("85 DB 0F 94 C3 0F B6 DB", [0xBBu8, 0x01, 0x00, 0x00, 0x00, 0x90, 0x90, 0x90]),
+        ("85 F6 0F 94 C3 0F B6 DB", [0xBBu8, 0x01, 0x00, 0x00, 0x00, 0x90, 0x90, 0x90]),
+    ] {
+        let mut off = 0;
+        while let Some(pos) = find_pattern_at(&data[off..], pat) {
+            patches.push(((off + pos) as u64, rep.to_vec()));
+            off += pos + rep.len();
+        }
+    }
+
+    // 写入
+    let mut f = fs::OpenOptions::new().write(true).open(path).map_err(|e| e.to_string())?;
+    for (off, bytes) in &patches {
+        f.seek(SeekFrom::Start(*off)).map_err(|e| e.to_string())?;
+        f.write_all(bytes).map_err(|e| e.to_string())?;
+    }
+    Ok(format!("Patched {} areas", patches.len()))
+}
+
 /// Patch EntitlementResolver.dll by replacing with pre-patched version
 /// The pre-patched DLL has ValidateSignature bypassed
 pub fn patch_entitlement_resolver(dll_path: &str) -> Result<String, String> {
+    // 6000.7+: Native AOT exe，字节级 patch
+    if dll_path.ends_with(".exe") {
+        return patch_licensing_client(dll_path);
+    }
     let path = Path::new(dll_path);
     if !path.exists() {
         return Err("DLL not found".into());

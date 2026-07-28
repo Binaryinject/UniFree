@@ -77,26 +77,47 @@ fn editor_exe_for_folder(folder: &PathBuf) -> PathBuf {
     { folder.join("Editor").join("Unity") }
 }
 
-/// Get the target DLL filename based on Unity version
-/// >= 6000: Unity.Licensing.EntitlementResolver.dll
+/// Check if version uses Native AOT Unity.Licensing.Client.exe (>= 6000.7)
+fn is_native_aot_editor(version: &str) -> bool {
+    let parts: Vec<&str> = version.split('.').collect();
+    if parts.len() < 2 {
+        return false;
+    }
+    let major: u32 = parts[0].parse().unwrap_or(0);
+    let minor: u32 = parts[1].parse().unwrap_or(0);
+    major == 6000 && minor >= 7
+}
+
+/// Get the target filename for patching based on Unity version
+/// >= 6000.7: Unity.Licensing.Client.exe (Native AOT)
+/// 6000.0-6000.6: Unity.Licensing.EntitlementResolver.dll
 /// < 6000: System.Security.Cryptography.Xml.dll
-fn dll_name_for_version(version_folder: &str) -> &'static str {
-    if version_folder.starts_with("6") {
+fn target_file_name_for_version(version_folder: &str) -> &'static str {
+    if is_native_aot_editor(version_folder) {
+        #[cfg(target_os = "windows")]
+        { "Unity.Licensing.Client.exe" }
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        { "Unity.Licensing.Client" }
+    } else if version_folder.starts_with("6") {
         "Unity.Licensing.EntitlementResolver.dll"
     } else {
         "System.Security.Cryptography.Xml.dll"
     }
 }
 
+fn dll_name_for_version(version_folder: &str) -> &'static str {
+    target_file_name_for_version(version_folder)
+}
+
 fn dll_path_for_folder(folder: &PathBuf) -> PathBuf {
     let version = folder.file_name().unwrap_or_default().to_string_lossy();
-    let dll_name = dll_name_for_version(&version);
+    let target_name = target_file_name_for_version(&version);
     #[cfg(target_os = "windows")]
-    { folder.join("Editor").join("Data").join("Resources").join("Licensing").join("Client").join(dll_name) }
+    { folder.join("Editor").join("Data").join("Resources").join("Licensing").join("Client").join(target_name) }
     #[cfg(target_os = "macos")]
-    { folder.join("Contents").join("Resources").join("Licensing").join("Client").join(dll_name) }
+    { folder.join("Contents").join("Resources").join("Licensing").join("Client").join(target_name) }
     #[cfg(target_os = "linux")]
-    { folder.join("Editor").join("Data").join("Resources").join("Licensing").join("Client").join(dll_name) }
+    { folder.join("Editor").join("Data").join("Resources").join("Licensing").join("Client").join(target_name) }
 }
 
 fn read_product_name(folder: &PathBuf) -> String {
