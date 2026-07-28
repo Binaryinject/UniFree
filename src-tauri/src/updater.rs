@@ -159,58 +159,31 @@ pub async fn download_and_install(
         .map_err(|e| format!("Flush error: {}", e))?;
     drop(file);
 
-    // Write a PowerShell script to a temp .ps1 file, then spawn it detached.
-    // The script sleeps 4s for the app to fully exit, runs the NSIS installer
-    // silently, then launches the updated exe.  PowerShell handles paths with
-    // spaces and special characters more reliably than cmd.
-    #[cfg(target_os = "windows")]
-    {
-        use std::io::Write;
-        use std::os::windows::process::CommandExt;
+    // Run the NSIS installer silently from this process, then restart.
+    //
+    // Windows allows overwriting a running .exe on disk — the old binary
+    // stays mapped in memory until the process exits, while the new binary
+    // replaces it on disk.  This is the same approach tauri-plugin-updater
+    // uses: run the installer, wait for it, then call tauri::process::restart().
+    let installer_path = file_path.clone();
 
-        let exe_path = std::env::current_exe()
-            .map_err(|e| format!("Failed to resolve current exe: {}", e))?;
-        let installer = file_path.display().to_string();
-        let exe = exe_path.display().to_string();
+    let status = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(&installer_path)
+            .arg("/S")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+    })
+    .await
+    .map_err(|e| format!("Failed to run installer task: {}", e))?
+    .map_err(|e| format!("Failed to run installer: {}", e))?;
 
-        let script = format!(
-            "Start-Sleep -Seconds 4\r\n\
-             Start-Process -FilePath '{installer}' -ArgumentList '/S' -Wait\r\n\
-             Start-Process -FilePath '{exe}'\r\n",
-            installer = installer.replace('\'', "''"),
-            exe = exe.replace('\'', "''"),
-        );
-
-        let ps1_path = download_dir.join("unifree_update.ps1");
-        let mut f = std::fs::File::create(&ps1_path)
-            .map_err(|e| format!("Failed to create update script: {}", e))?;
-        f.write_all(script.as_bytes())
-            .map_err(|e| format!("Failed to write update script: {}", e))?;
-        drop(f);
-
-        std::process::Command::new("powershell")
-            .args([
-                "-ExecutionPolicy", "Bypass",
-                "-NoProfile",
-                "-WindowStyle", "Hidden",
-                "-File",
-            ])
-            .arg(ps1_path.display().to_string())
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .spawn()
-            .map_err(|e| format!("Failed to start update script: {}", e))?;
-
-        // Release file lock so installer can replace the exe.
-        app.exit(0);
+    if !status.success() {
+        return Err(format!("Installer exited with code: {:?}", status.code()));
     }
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = app; // avoid unused warning on non-Windows.
-        return Err("Silent install is only supported on Windows".into());
-    }
-
-    Ok(())
+    // Restart — loads the newly installed binary
+    app.restart();
 }
 
 /// Compare version strings (e.g. "2.3.0" vs "2.3.1")
