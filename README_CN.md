@@ -7,12 +7,11 @@
 ## 功能特性
 
 - **Unity Hub 补丁** - 通过 JavaScript 补丁绕过许可证验证（UniHacker 方法）
-- **Unity Editor 补丁** - 版本感知 DLL 替换，绕过签名验证
-  - Unity 6000+：替换 `Unity.Licensing.EntitlementResolver.dll`
+- **Unity Editor 补丁** - 版本感知补丁，绕过签名验证
+  - Unity 6000.7+：**Native AOT 二进制补丁** — 字节级锚点定位，绕过证书链、签名门控和加密验证
+  - Unity 6000.0-6000.6：替换 `Unity.Licensing.EntitlementResolver.dll`
   - Unity 2019-2022：替换 `System.Security.Cryptography.Xml.dll`
-- **许可证生成** - 从硬件信息生成 RSA 签名的许可证文件
-  - 支持 Pro / Plus / Enterprise / Industrial 许可证类型，各有不同 feature 集
-  - 真实 RSA-SHA1 签名（随机或用户提供的 PEM 私钥）
+- **许可证生成** - 从硬件信息生成 RSA 签名的 Unity Pro 许可证文件
 - **自定义路径** - 支持自定义 Hub 和 Editor 扫描目录
 - **Editor 刷新** - 刷新按钮重新扫描已安装的编辑器
 - **现代化界面** - 基于 Tauri 2.0 + React + Material-UI 构建
@@ -47,30 +46,26 @@ UniFree 提取 `app.asar` 并补丁 JavaScript 文件以绕过许可证验证：
 | `DefaultLocalConfig-*.js` | `DisableSignInRequired` → `true` |
 | `DefaultLocalConfig-*.js` | `DisableAutoUpdate` → `true` |
 
-### Editor 补丁（DLL 替换）
+### Editor 补丁
 
-版本感知 DLL 替换，绕过 `ValidateSignature` 验证：
+版本感知补丁，绕过 `ValidateSignature` 签名验证：
 
-| Unity 版本 | 目标 DLL | 替换用 DLL |
-|------------|----------|-----------|
-| 6000+ | `Unity.Licensing.EntitlementResolver.dll` | `Unity.Licensing.EntitlementResolver.dll`（预补丁） |
-| 2019-2022 | `System.Security.Cryptography.Xml.dll` | `System.Security.Cryptography.Xml.dll`（预补丁） |
+| Unity 版本 | 目标文件 | 方法 |
+|------------|----------|------|
+| **6000.7+** | `Unity.Licensing.Client.exe` | **字节级锚点补丁**（4 个补丁：证书链、签名门控、LABEL_14 检查、BCrypt/NCrypt） |
+| 6000.0-6000.6 | `Unity.Licensing.EntitlementResolver.dll` | 预补丁 DLL 替换 |
+| 2019-2022 | `System.Security.Cryptography.Xml.dll` | 预补丁 DLL 替换 |
+
+对于 6000.7+，二进制文件为 .NET 10 Native AOT 编译（无 IL 代码）。补丁使用模式匹配锚点定位并修改原生指令，在同发布线内具有跨小版本的兼容性。详见 `docs/editor-dll-patching.md`。
 
 ### 许可证生成
 
 1. 收集硬件信息（Windows 产品 ID、磁盘序列号、BIOS 序列号、MAC 地址）
-2. 生成带有真实机器绑定和产品特定 feature 的 ALF（激活许可证文件）
-3. 使用随机或用户提供的私钥进行 RSA-SHA1 签名
+2. 生成带有真实机器绑定的 ALF（激活许可证文件）
+3. 使用随机私钥进行 RSA-SHA1 签名
 4. 写入 `C:\ProgramData\Unity\Unity_lic.ulf`
 
-**许可证类型与 Feature：**
-
-| 许可证 | Feature |
-|--------|---------|
-| Unity Pro | 0, 2, 4, 9, 13, 20, 21, 22, 30, 39, 40, 60, 65 |
-| Unity Plus | 0, 2, 4, 9, 13, 22, 39, 40, 60 |
-| Unity Enterprise | Pro 全部 + 70 |
-| Unity Industrial | Enterprise 全部 + 80 |
+**Unity Pro Features:** 0, 2, 4, 9, 13, 20, 21, 22, 30, 39, 40, 60, 65
 
 ## 修改内容
 
@@ -78,8 +73,9 @@ UniFree 提取 `app.asar` 并补丁 JavaScript 文件以绕过许可证验证：
 |------|------|------|
 | Hub | `app.asar` | 提取到 `app/`，补丁 JS，重命名为 `.bak` |
 | Hub | `hubConfig.json` | 更新登录和更新设置 |
-| Editor (6000+) | `Unity.Licensing.EntitlementResolver.dll` | 替换为预补丁版本 |
-| Editor (2019-2022) | `System.Security.Cryptography.Xml.dll` | 替换为预补丁版本 |
+| Editor (6000.7+) | `Unity.Licensing.Client.exe` | 字节级二进制补丁（4 个锚点补丁） |
+| Editor (6000.0-6000.6) | `Unity.Licensing.EntitlementResolver.dll` | 替换为预补丁 DLL |
+| Editor (2019-2022) | `System.Security.Cryptography.Xml.dll` | 替换为预补丁 DLL |
 | License | `C:\ProgramData\Unity\Unity_lic.ulf` | 生成 RSA 签名的许可证文件 |
 
 ## 从源码构建
@@ -125,3 +121,23 @@ MIT 许可证 - 详见 [LICENSE](LICENSE)
 ---
 
 **UniFree 2.5.0** - Unity 许可证自由工具
+
+## 更新日志
+
+### v2.5.0
+- **Native AOT 二进制补丁支持 Unity 6000.7+** — 字节级锚点补丁绕过 `Unity.Licensing.Client.exe` 的许可证签名验证
+- 4 个精准补丁：证书链绕过、ValidateSignature 门控跳过、LABEL_14 证书检查绕过、BCrypt/NCrypt NTSTATUS 绕过
+- 基于锚点的模式匹配，同 Unity 发布线内跨小版本兼容
+- 每次补丁前自动从备份恢复，确保干净状态
+
+### v2.4.0
+- 新增自动更新：启动时检查 GitHub releases 是否有新版本
+- 下载进度条支持取消操作
+- 下载完成后静默 NSIS 安装
+
+### v2.3.1
+- 移除许可证类型选择（Enterprise/Industrial/Plus）
+- 简化为 Unity Pro — Unity Hub 的 Licensing Client 不支持 Enterprise/Industry 类型
+- 移除自定义 RSA PEM 密钥输入（自动生成随机密钥）
+- 替换 Hub 的 `System.Security.Cryptography.Xml.dll` 以绕过签名验证
+- 恢复 Hub 的 Licensing Client 以正确检测许可证
