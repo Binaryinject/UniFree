@@ -161,13 +161,13 @@ pub async fn download_and_install(
 
     // Run installer silently, wait for it, then relaunch the app.
     //
-    // Tauri NSIS installer in /S mode does not relaunch the app on its own,
-    // and the running UniFree process would hold a lock on the exe — so we
-    // spawn a detached helper cmd that:
-    //   1. waits ~2s for the current app to exit,
-    //   2. runs the silent installer and waits for it to finish,
-    //   3. launches the freshly installed exe,
-    // then we call app.exit(0) to release the file lock immediately.
+    // Strategy: spawn a detached cmd that:
+    //   1. Waits ~4s for the current app to fully exit and release file locks,
+    //   2. Runs the NSIS installer silently (/S) and waits for it to finish,
+    //   3. Launches the freshly installed exe via start (don't wait).
+    //
+    // Using && instead of & ensures each step only runs if the previous succeeded.
+    // The installer runs directly (not via start) so cmd properly waits for it.
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -177,10 +177,8 @@ pub async fn download_and_install(
         let installer_str = file_path.display().to_string();
         let exe_str = exe_path.display().to_string();
 
-        // Quotes are important: paths may contain spaces.
-        // Note: start "title" "command" - first quoted arg is window title, use "" for empty title
         let cmd_line = format!(
-            "timeout /t 2 /nobreak >nul & start \"\" /wait \"{installer}\" /S & start \"\" \"{exe}\"",
+            "ping -n 5 127.0.0.1 >nul && \"{installer}\" /S && start \"\" \"{exe}\"",
             installer = installer_str,
             exe = exe_str,
         );
