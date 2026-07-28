@@ -159,38 +159,58 @@ pub async fn download_and_install(
         .map_err(|e| format!("Flush error: {}", e))?;
     drop(file);
 
-    // Run the NSIS installer silently from this process, then restart.
+    // Spawn a detached cmd that:
+    //   1. Waits for this process (PID) to exit via polling,
+    //   2. Runs the NSIS installer silently (/S),
+    //   3. Launches the updated app.
     //
-    // Windows allows overwriting a running .exe on disk — the old binary
-    // stays mapped in memory until the process exits, while the new binary
-    // replaces it on disk.  This is the same approach tauri-plugin-updater
-    // uses: run the installer, wait for it, then call tauri::process::restart().
-    let installer_path = file_path.clone();
+    // We pass our PID so the script polls `tasklist` until we're gone,
+    // guaranteeing the installer can safely replace the locked exe.
+    #[cfg(target_os = "windows")]
+    {
+        use std::io::Write;
+        use std::os::windows::process::CommandExt;
 
-    let status = tokio::task::spawn_blocking(move || {
-        std::process::Command::new(&installer_path)
-            .arg("/S")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-    })
-    .await
-    .map_err(|e| format!("Failed to run installer task: {}", e))?
-    .map_err(|e| format!("Failed to run installer: {}", e))?;
+        let exe = std::env::current_exe()
+            .unwrap_or_else(|_| std::path::PathBuf::from("unifree.exe"));
+        let installer = file_path.clone();
+        let pid = std::process::id();
 
-    if !status.success() {
-        return Err(format!("Installer exited with code: {:?}", status.code()));
+        // Write a temp batch file to guarantee correct path handling
+        let bat_path = file_path.with_extension("bat");
+        let mut bat = std::fs::File::create(&bat_path)
+            .map_err(|e| format!("Failed to create batch: {}", e))?;
+        write!(
+            bat,
+            "@echo off\r\n\
+             :wait\r\n\
+             ping -n 2 127.0.0.1 >nul\r\n\
+             tasklist /FI \"PID eq {pid}\" 2>nul | find \"{pid}\" >nul\r\n\
+             if not errorlevel 1 goto wait\r\n\
+             \"{installer}\" /S\r\n\
+             start \"\" \"{exe}\"\r\n\
+             del \"%~f0\"\r\n",
+            pid = pid,
+            installer = installer.display(),
+            exe = exe.display(),
+        )
+        .map_err(|e| format!("Failed to write batch: {}", e))?;
+        drop(bat);
+
+        std::process::Command::new("cmd")
+            .args(["/C", &bat_path.display().to_string()])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .spawn()
+            .map_err(|e| format!("Failed to start updater: {}", e))?;
+
+        std::process::exit(0);
     }
 
-    // Delay briefly for filesystem to settle, then restart.
-    // Use raw std::process to spawn the updated binary and exit,
-    // instead of app.restart(), to avoid potential Tauri lifecycle issues.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-    let exe = std::env::current_exe()
-        .unwrap_or_else(|_| std::path::PathBuf::from("unifree.exe"));
-    std::process::Command::new(&exe).spawn().ok();
-    std::process::exit(0);
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = file_path;
+        return Err("Silent install is only supported on Windows".into());
+    }
 }
 
 /// Compare version strings (e.g. "2.3.0" vs "2.3.1")
