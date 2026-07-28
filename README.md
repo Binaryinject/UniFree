@@ -1,4 +1,4 @@
-# UniFree 2.4.0
+# UniFree 2.5.0
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -7,8 +7,9 @@
 ## Features
 
 - **Unity Hub Patching** - Bypass license validation via JavaScript patching (UniHacker method)
-- **Unity Editor Patching** - Version-aware DLL replacement to bypass signature verification
-  - Unity 6000+: replaces `Unity.Licensing.EntitlementResolver.dll`
+- **Unity Editor Patching** - Version-aware patching to bypass signature verification
+  - Unity 6000.7+: **Native AOT binary patching** — byte-level anchors bypass certificate chain, signature gate, and crypto verification
+  - Unity 6000.0-6000.6: replaces `Unity.Licensing.EntitlementResolver.dll`
   - Unity 2019-2022: replaces `System.Security.Cryptography.Xml.dll`
 - **License Generation** - Generate RSA-signed Unity Pro license files from hardware info
 - **Custom Paths** - Support custom Hub and Editor scan directories
@@ -45,14 +46,17 @@ UniFree extracts `app.asar` and patches JavaScript files to bypass license valid
 | `DefaultLocalConfig-*.js` | `DisableSignInRequired` → `true` |
 | `DefaultLocalConfig-*.js` | `DisableAutoUpdate` → `true` |
 
-### Editor Patching (DLL Replacement)
+### Editor Patching
 
-Version-aware DLL replacement that bypasses `ValidateSignature`:
+Version-aware patching that bypasses `ValidateSignature`:
 
-| Unity Version | Target DLL | Replacement DLL |
-|---------------|------------|-----------------|
-| 6000+ | `Unity.Licensing.EntitlementResolver.dll` | `Unity.Licensing.EntitlementResolver.dll` (pre-patched) |
-| 2019-2022 | `System.Security.Cryptography.Xml.dll` | `System.Security.Cryptography.Xml.dll` (pre-patched) |
+| Unity Version | Target File | Method |
+|---------------|------------|--------|
+| **6000.7+** | `Unity.Licensing.Client.exe` | **Byte-level anchor-based patching** (4 patches: cert chain, signature gate, LABEL_14 check, BCrypt/NCrypt) |
+| 6000.0-6000.6 | `Unity.Licensing.EntitlementResolver.dll` | Pre-patched DLL replacement |
+| 2019-2022 | `System.Security.Cryptography.Xml.dll` | Pre-patched DLL replacement |
+
+For 6000.7+, the binary is .NET 10 Native AOT compiled (no IL). Patches use pattern-matching anchors to locate and modify specific native instructions, providing cross-minor-version compatibility. See `docs/editor-dll-patching.md` for technical details.
 
 ### License Generation
 
@@ -69,8 +73,9 @@ Version-aware DLL replacement that bypasses `ValidateSignature`:
 |-----------|------|--------|
 | Hub | `app.asar` | Extract to `app/`, patch JS, rename to `.bak` |
 | Hub | `hubConfig.json` | Update sign-in and update settings |
-| Editor (6000+) | `Unity.Licensing.EntitlementResolver.dll` | Replace with pre-patched version |
-| Editor (2019-2022) | `System.Security.Cryptography.Xml.dll` | Replace with pre-patched version |
+| Editor (6000.7+) | `Unity.Licensing.Client.exe` | Byte-level binary patch (4 anchor-based patches) |
+| Editor (6000.0-6000.6) | `Unity.Licensing.EntitlementResolver.dll` | Replace with pre-patched DLL |
+| Editor (2019-2022) | `System.Security.Cryptography.Xml.dll` | Replace with pre-patched DLL |
 | License | `C:\ProgramData\Unity\Unity_lic.ulf` | Generate RSA-signed license file |
 
 ## Build from Source
@@ -115,9 +120,15 @@ MIT License - See [LICENSE](LICENSE) for details
 
 ---
 
-**UniFree 2.4.0** - Unity License Freedom Tool
+**UniFree 2.5.0** - Unity License Freedom Tool
 
 ## Changelog
+
+### v2.5.0
+- **Native AOT binary patching for Unity 6000.7+** — byte-level anchor-based patches to bypass license signature verification in `Unity.Licensing.Client.exe`
+- 4 precision patches: cert chain bypass, ValidateSignature gate skip, LABEL_14 cert check bypass, BCrypt/NCrypt NTSTATUS bypass
+- Anchor-based pattern matching for cross-minor-version compatibility within the same Unity release line
+- Automatic restore from backup before each patch, ensuring clean state
 
 ### v2.4.0
 - Added auto-update: checks GitHub releases for new versions on startup

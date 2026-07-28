@@ -2,27 +2,227 @@
 
 ## 概述
 
-Unity Editor 使用 `Unity.Licensing.EntitlementResolver.dll` 验证许可证签名。补丁目标是绕过 `ValidateSignature` 方法，使其接受任何签名（包括假签名）。
+Unity Editor 使用 `Unity.Licensing.EntitlementResolver.dll`（< 6000.7）或
+`Unity.Licensing.Client.exe`（>= 6000.7，.NET 10 Native AOT）验证许可证签名。
+补丁目标是绕过 `ValidateSignature` 方法，使其接受任何签名的 ULF 文件。
 
-## 补丁原理
+## 版本分界
 
-### 目标方法
+| Unity 版本 | 目标文件 | 文件类型 | 补丁方法 |
+|-----------|---------|---------|---------|
+| < 6000 | `System.Security.Cryptography.Xml.dll` | .NET IL DLL | 替换预编译 DLL |
+| 6000.0 ~ 6000.6 | `Unity.Licensing.EntitlementResolver.dll` | .NET IL DLL | 替换预编译 DLL |
+| **>= 6000.7** | **`Unity.Licensing.Client.exe`** | **Native AOT PE** | **字节级 patch（见下文）** |
 
-`ValidateSignature` 方法位于 `Unity.Licensing.EntitlementResolver.dll` 中，负责：
+---
+
+## Native AOT 补丁（Unity >= 6000.7）
+
+### 目标文件
+
+```
+{Editor}/Data/Resources/Licensing/Client/Unity.Licensing.Client.exe
+```
+
+例如：`C:\Program Files\Unity\Hub\Editor\6000.7.0a3\Editor\Data\Resources\Licensing\Client\Unity.Licensing.Client.exe`
+
+### 实现位置
+
+`src-tauri/src/patcher.rs` → `patch_licensing_client()`
+
+### 二进制结构
+
+- PE 格式，约 22MB，~66,000 个函数
+- `.text` 节：VA 基址 = `0x1000`，文件偏移 = `0x400`
+- **文件偏移 = VA - 0xC00**（即 `VA - 0x1000 + 0x400`）
+- `.rdata` 节：VA 范围约 `0x140941000` - `0x141249000`
+- `.data` 节：VA 范围约 `0x141249000` - `0x1413cc000`
+
+### 许可证验证流程（逆向分析结论）
+
+```
+UlfLicense.Parse()
+  → XmlReader.Read()
+    → XmlExtensions.ValidateSignature(doc, cert, checkEnabled, ...)
+      │
+      ├─[门控] if (!hasSignature || !checkEnabled) → 跳到 LABEL_14
+      │         ↑ P2 将此 jz 改为 jmp，强制跳过整个签名验证分支
+      │
+      ├─ CheckSignature()  → BCryptVerifySignature / NCryptVerifySignature
+      │                      ↑ P4 将 NTSTATUS→bool 转换改为始终返回 true
+      │
+      ├─ 时间检查 (NotBefore / NotAfter)
+      │
+      ├─ 公钥比较: sub_1401708C0 (SequenceEqual)
+      │   比较 ULF XML 中的 <RSAKeyValue> 与 Unity 内嵌证书公钥
+      │   ⚠️ UniFree 使用随机 RSA 密钥对，此比较永远失败！
+      │
+      └─[LABEL_14] sub_14042AE40(doc, cert, a3=1)
+           └─ sub_14042ADC0(doc, cert)
+              ├─ sub_14042BD80()  检查 #1
+              ├─ sub_14042BDD0()  检查 #2
+              ├─ sub_14042BB80()  检查 #3
+              └─ sub_14042D020()  最终处理
+              ↑ P3 将函数头改为 mov eax,1; ret，跳过所有检查
+```
+
+### 补丁一览
+
+| Patch | 位置 (函数/指令) | 锚点模式 | 补丁内容 |
+|-------|-----------------|---------|---------|
+| **P1** | `CertVerifyCertificateChainPolicy` 调用点 | `C7 44 24 ?? 10 00 00 00 89 54 24 ??` → +0x34 | call→mov eax,0x10101; jmp; nop; nop |
+| **P2** | ValidateSignature 门控 `jz` | `44 85 C2 74 ?? 4C 8D 44 24 ?? 48 8B D0 48 8D 0D` → +3 | `74` → `EB`（jz → jmp） |
+| **P3** | `sub_14042ADC0` 函数头 | `56 53 48 83 EC 28 48 8B D9 48 8B F2 48 8B CB E8 ?? ?? ?? ?? 85 C0 74 ?? 48 8B CB 48 8B D6` | 函数头 6 字节 → `B8 01 00 00 00 C3`（mov eax,1; ret） |
+| **P4** | BCrypt/NCrypt NTSTATUS 返回点（5 处） | 全文件扫描 `test/setz/movzx` 模式 | mov reg,1; nop... |
+
+**P2 + P3 是核心**，P1 + P4 是纵深防御。
+
+### 已验证版本
+
+| 版本 | 文件大小 | 补丁结果 |
+|------|---------|---------|
+| 6000.7.0a3 | 22,086,568 bytes | ✅ 全部 4 个 patch 应用成功 |
+
+### 排查方法
+
+#### 日志位置
+
+```
+C:\Users\{用户名}\AppData\Local\Unity\Unity.Licensing.Client.log
+```
+
+关键日志行：
+- `Exception caught while parsing license` — ULF 解析失败
+- `System.IO.InvalidDataException: The digital signature is invalid.` — 签名验证失败
+- `Processed 0 license files` — 0 个许可证被加载
+- `Found 0 entitlement groups` — Editor 收到的结果是 0 个授权组 → 显示 "No valid license"
+
+#### 进程管理
+
+补丁后必须杀掉旧的 Licensing Client 进程再重开 Editor：
+
+```powershell
+taskkill /F /IM Unity.Licensing.Client.exe
+```
+
+补丁前也应确保没有 Editor 正在使用该文件。
+
+#### 验证补丁是否生效
+
+```bash
+exe="path/to/Unity.Licensing.Client.exe"
+# P1: 期望 b801010000eb139090
+dd if="$exe" bs=1 skip=$((0x40D22B)) count=9 2>/dev/null | xxd -p
+# P2: 期望 eb46
+dd if="$exe" bs=1 skip=$((0x4F02D9)) count=2 2>/dev/null | xxd -p
+# P3: 期望 b801000000c3
+dd if="$exe" bs=1 skip=$((0x42A1C0)) count=6 2>/dev/null | xxd -p
+```
+
+### 适配新版本的 IDA MCP 工作流
+
+当新版本 Unity 发布，锚点模式可能失效。以下是发现新补丁点的流程：
+
+#### 1. 确认失败点
+
+查看 `Unity.Licensing.Client.log` 中的异常调用栈。`ValidateSignature + 0x565`
+这样的偏移可以帮助在 IDA 中定位函数。
+
+#### 2. 定位 ValidateSignature 函数
+
+Native AOT 不保留托管方法名作为符号（`lookup_funcs` 找不到），
+需要间接定位：
+
+```
+# 搜索关键字符串
+mcp__ida__find_string("digital signature")
+
+# 搜索 BCrypt/NCrypt 导入的交叉引用
+mcp__ida__xrefs_to(BCryptVerifySignature_thunk_VA)
+
+# 从 xref 回溯到调用者函数，找到 ValidateSignature
+```
+
+#### 3. 分析验证流程
+
+```python
+# 反编译可疑函数
+mcp__ida__decompile(function_VA)
+
+# 查看调用者和被调用者
+mcp__ida__callers(function_VA)
+mcp__ida__callees(function_VA)
+```
+
+#### 4. 找到门控指令（P2 等价物）
+
+在 ValidateSignature 反编译中找：
+```c
+if ((hasSignature & checkEnabled) == 0)
+    goto LABEL_14;  // 跳过签名验证
+```
+
+对应的汇编是 `test r1, r2; jz +offset`。
+
+#### 5. 提取锚点字节
+
+```python
+mcp__ida__get_bytes(address, size=30)
+```
+
+用 IDA 中的确切字节构建通配符模式，然后用测试程序验证唯一性：
+
+```rust
+// 临时测试程序：验证锚点在文件中只匹配一次
+fn main() {
+    let data = fs::read("Unity.Licensing.Client.exe").unwrap();
+    let anchor = "新锚点模式";
+    let mut off = 0usize;
+    let mut count = 0;
+    while let Some(m) = find_pattern_at(&data[off..], anchor) {
+        println!("Match {}: 0x{:X}", count, off + m);
+        count += 1;
+        off += m + 1;
+    }
+    println!("Total: {} (should be 1)", count);
+}
+```
+
+#### 6. 锚点设计原则
+
+- **唯一性优先**：锚点在 22MB 文件中必须只命中一次
+- **保守通配**：对绝对地址（call 偏移、栈偏移）使用 `??`，对寄存器操作码保持精确
+- **测试验证**：始终在 .bak（干净副本）上测试，确保所有锚点正确命中
+- **上下文包围**：尽量包含目标指令前后足够多的上下文字节
+- **避免匹配开头**：`find_pattern` 返回第一个匹配，如果锚点在文件中有多个命中，取第一个会导致补丁错位
+
+### Version-specific hardcoded offsets (for shell/dd manual patching)
+
+以下偏移仅适用于 **6000.7.0a3** 版本的参考，patch.rs 使用锚点模式匹配，
+不依赖硬编码偏移：
+
+| Patch | 文件偏移 | 原始字节 | 补丁字节 |
+|-------|---------|---------|---------|
+| P1 | 0x40D22B | E8...85C07418... | B801010000EB139090 |
+| P2 | 0x4F02D9 | 74 46 | EB 46 |
+| P3 | 0x42A1C0 | 56534883EC28 | B801000000C3 |
+| P4a | 0x3C22E8 | 85DB0F94C00FB6C0 | B801000000909090 |
+| P4b | 0x3C244B | 85DB0F94C00FB6C0 | B801000000909090 |
+| P4c | 0x3F9483 | 85DB0F94C30FB6DB | BB01000000909090 |
+| P4d | 0x3FEEC9 | 85F60F94C30FB6DB | BB01000000909090 |
+| P4e | 0x3FF0FD | 85F60F94C30FB6DB | BB01000000909090 |
+
+---
+
+## 旧版 .NET IL DLL 补丁（< 6000.7）
+
+### 补丁原理
+
+`ValidateSignature` 方法位于 DLL 中，负责：
 1. 验证许可证文件的 XML 数字签名
 2. 验证 PACL（来自 Unity 服务器）的签名
 
-### 验证流程
-
-```
-ValidateSignature()
-├── 检查许可证签名 → CheckSignature() → 失败则抛出 InvalidDataException
-└── 检查 PACL 签名 → CheckSignature() → 失败则抛出 InvalidDataException
-```
-
-### 补丁策略
-
-**方法一：二进制补丁（推荐用于新版本）**
+#### IL 级补丁方法
 
 1. 搜索错误字符串 `"The digital signature is invalid."` 的 UTF-16 编码
 2. 向前搜索 IL 指令模式：`ldstr` (0x72) + `newobj` (0x73) + `throw` (0x2A)
@@ -55,119 +255,27 @@ ValidateSignature()
   nop                                        // 0x00
 ```
 
-**方法二：替换预编译 DLL（简单可靠）**
+### 当前实现
 
-直接使用已补丁的 DLL 替换原始文件。适用于：
-- 二进制补丁失败（字节模式不匹配）
-- DLL 版本与预编译版本匹配
+对于 < 6000.7 版本，`patch_entitlement_resolver()` 直接替换为预编译的补丁 DLL。
+预编译 DLL 按 Unity 主版本组织在 `src-tauri/resources/win/` 目录下。
 
-## 版本兼容性
-
-### 已知版本
+### 版本兼容性
 
 | DLL 版本 | 文件大小 | 补丁方法 |
 |---------|---------|---------|
 | 1.18.1 (Editor) | ~341KB | 预编译 DLL |
 | 1.17.4 (Hub) | ~514KB | 不兼容，需 asar 补丁 |
 
-### 版本变化检测
-
-1. **检查文件大小**：原始 DLL ~514KB，补丁后 ~341KB
-2. **检查备份文件**：`.bak` 文件存在表示已补丁
-3. **检查字符串**：搜索 "The digital signature is invalid."
-
-## 实现代码
-
-```rust
-/// 补丁 EntitlementResolver.dll
-/// 
-/// # 参数
-/// - `dll_path`: DLL 文件路径
-/// 
-/// # 返回
-/// - `Ok(String)`: 补丁成功消息
-/// - `Err(String)`: 错误信息
-pub fn patch_entitlement_resolver(dll_path: &str) -> Result<String, String> {
-    let path = Path::new(dll_path);
-    if !path.exists() {
-        return Err("DLL not found".into());
-    }
-
-    // 创建备份
-    let bak_path = format!("{}.bak", dll_path);
-    if !Path::new(&bak_path).exists() {
-        fs::copy(path, &bak_path).map_err(|e| e.to_string())?;
-    }
-
-    // 使用预编译的补丁 DLL
-    let patched_dll = include_bytes!("../resources/win/Unity.Licensing.EntitlementResolver.dll");
-    fs::write(path, patched_dll).map_err(|e| format!("Failed to write patched DLL: {}", e))?;
-    
-    Ok("Patched: replaced with pre-patched DLL".into())
-}
-```
-
-## 补丁后行为
-
-1. **许可证验证**：任何带有 `<Signature>` 节点的 ULF 文件都会被接受
-2. **签名内容**：签名可以是假的（如 `<Signature>dummy</Signature>`）
-3. **许可证格式**：必须符合 Unity 许可证 XML 格式
-
-## 故障排除
-
-### 问题：二进制补丁失败
-
-**原因**：DLL 版本更新，字节模式不匹配
-
-**解决**：
-1. 使用 dnlib 或 ILSpy 反编译新版本 DLL
-2. 查找 `ValidateSignature` 方法
-3. 更新字节模式或创建新的预编译 DLL
-
-### 问题：补丁后许可证仍无效
-
-**原因**：许可证格式错误或缺少必要字段
-
-**检查**：
-1. 许可证必须有 `<Signature>` 节点
-2. 许可证必须有正确的 XML 结构
-3. 机器绑定信息必须匹配
-
-### 问题：Hub 版本不兼容
-
-**原因**：Hub 使用不同版本的 Licensing Client
-
-**解决**：使用 asar 补丁方法（见 hub-asar-patching.md）
-
 ## 相关文件
 
-- `src-tauri/resources/win/{version}/Unity.Licensing.EntitlementResolver.dll` - 按版本组织的预编译补丁 DLL
-- `tools/patch-dll/` - 离线 DLL 二进制补丁工具
-- `src-tauri/src/patcher.rs` - 运行时替换逻辑（使用预编译 DLL）
-- `src/components/EditorTab.tsx` - 前端 UI
-
-## 版本特定 DLL 目录结构
-
-```
-src-tauri/resources/win/
-├── 2019/Unity.Licensing.EntitlementResolver.dll  (需离线补丁)
-├── 2020/Unity.Licensing.EntitlementResolver.dll  (需离线补丁)
-├── 2021/Unity.Licensing.EntitlementResolver.dll  (需离线补丁)
-├── 2022/Unity.Licensing.EntitlementResolver.dll  (需离线补丁)
-└── 6000/Unity.Licensing.EntitlementResolver.dll  (已预编译)
-```
-
-## 离线补丁工具
-
-使用 `tools/patch-dll/` 对 2019-2022 版本的 DLL 进行离线二进制补丁：
-
-```bash
-cd tools/patch-dll && cargo run
-```
-
-补丁后，运行时 `patch_entitlement_resolver()` 直接使用预编译 DLL 替换。
+- `src-tauri/src/patcher.rs` — 补丁实现（包含 Native AOT 和 IL DLL 两种路径）
+- `src-tauri/src/scanner.rs` — 版本检测（`is_native_aot_editor`）
+- `src-tauri/src/ulf_signer.rs` — ULF 签名生成
+- `src-tauri/resources/win/` — 预编译补丁 DLL（< 6000.7 版本）
 
 ## 更新日志
 
+- 2026-07-28: 完成 Unity 6000.7+ Native AOT 字节级补丁（4 个 patch 点），更新文档
 - 2026-07-04: 添加离线二进制补丁工具（tools/patch-dll），按版本组织 DLL
 - 2026-07-04: 简化为直接使用预编译 DLL，移除二进制补丁逻辑
