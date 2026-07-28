@@ -182,8 +182,15 @@ pub async fn download_and_install(
         return Err(format!("Installer exited with code: {:?}", status.code()));
     }
 
-    // Restart — loads the newly installed binary
-    app.restart();
+    // Delay briefly for filesystem to settle, then restart.
+    // Use raw std::process to spawn the updated binary and exit,
+    // instead of app.restart(), to avoid potential Tauri lifecycle issues.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    let exe = std::env::current_exe()
+        .unwrap_or_else(|_| std::path::PathBuf::from("unifree.exe"));
+    std::process::Command::new(&exe).spawn().ok();
+    std::process::exit(0);
 }
 
 /// Compare version strings (e.g. "2.3.0" vs "2.3.1")
