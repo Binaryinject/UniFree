@@ -159,35 +159,46 @@ pub async fn download_and_install(
         .map_err(|e| format!("Flush error: {}", e))?;
     drop(file);
 
-    // Run installer silently, wait for it, then relaunch the app.
-    //
-    // Strategy: spawn a detached cmd that:
-    //   1. pings localhost ~5s to give the current app time to fully exit,
-    //   2. start /wait runs the NSIS installer silently and blocks until done,
-    //   3. start launches the freshly installed exe.
-    //
-    // start /wait is needed (rather than running the installer directly)
-    // because NSIS may spawn a child process and return early.
+    // Write a PowerShell script to a temp .ps1 file, then spawn it detached.
+    // The script sleeps 4s for the app to fully exit, runs the NSIS installer
+    // silently, then launches the updated exe.  PowerShell handles paths with
+    // spaces and special characters more reliably than cmd.
     #[cfg(target_os = "windows")]
     {
+        use std::io::Write;
         use std::os::windows::process::CommandExt;
 
         let exe_path = std::env::current_exe()
             .map_err(|e| format!("Failed to resolve current exe: {}", e))?;
-        let installer_str = file_path.display().to_string();
-        let exe_str = exe_path.display().to_string();
+        let installer = file_path.display().to_string();
+        let exe = exe_path.display().to_string();
 
-        let cmd_line = format!(
-            "ping -n 6 127.0.0.1 >nul & start \"\" /wait \"{installer}\" /S & start \"\" \"{exe}\"",
-            installer = installer_str,
-            exe = exe_str,
+        let script = format!(
+            "Start-Sleep -Seconds 4\r\n\
+             Start-Process -FilePath '{installer}' -ArgumentList '/S' -Wait\r\n\
+             Start-Process -FilePath '{exe}'\r\n",
+            installer = installer.replace('\'', "''"),
+            exe = exe.replace('\'', "''"),
         );
 
-        std::process::Command::new("cmd")
-            .args(["/C", &cmd_line])
+        let ps1_path = download_dir.join("unifree_update.ps1");
+        let mut f = std::fs::File::create(&ps1_path)
+            .map_err(|e| format!("Failed to create update script: {}", e))?;
+        f.write_all(script.as_bytes())
+            .map_err(|e| format!("Failed to write update script: {}", e))?;
+        drop(f);
+
+        std::process::Command::new("powershell")
+            .args([
+                "-ExecutionPolicy", "Bypass",
+                "-NoProfile",
+                "-WindowStyle", "Hidden",
+                "-File",
+            ])
+            .arg(ps1_path.display().to_string())
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn()
-            .map_err(|e| format!("Failed to start installer: {}", e))?;
+            .map_err(|e| format!("Failed to start update script: {}", e))?;
 
         // Release file lock so installer can replace the exe.
         app.exit(0);

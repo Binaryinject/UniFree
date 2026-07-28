@@ -124,6 +124,9 @@ MIT License - See [LICENSE](LICENSE) for details
 
 ## Changelog
 
+### v2.5.3
+- Fix updater: use PowerShell script for reliable silent install + restart (handles paths with spaces correctly)
+
 ### v2.5.2
 - Fix updater: use `ping` delay + `start /wait` for reliable silent install and auto-restart
 - Prevents race condition where NSIS installer returns before installation completes
