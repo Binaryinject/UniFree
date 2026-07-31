@@ -125,39 +125,22 @@ pub fn patch_licensing_client(exe_path: &str) -> Result<String, String> {
     let data = fs::read(path).map_err(|e| format!("Failed to read: {}", e))?;
     let mut patches: Vec<(u64, Vec<u8>)> = Vec::new();
 
-    // P1: CertVerifyCertificateChainPolicy → 始终返回成功
-    // 锚点: CERT_CHAIN_POLICY_PARA.cbSize = 16
-    let p1 = find_pattern(&data, "C7 44 24 ?? 10 00 00 00 89 54 24 ??")
-        .ok_or("P1: cert chain anchor not found")? + 0x34;
-    patches.push((p1, vec![0xB8, 0x01, 0x01, 0x00, 0x00, 0xEB, 0x13, 0x90, 0x90]));
+    // 唯一补丁：XmlExtensions.ValidateSignature 包装函数 (sub_1404F1C10) → 始终返回 1
+    // Parse 流程调用此函数进行签名验证但忽略返回值，失败路径通过异常/__debugbreak 中断。
+    // 将函数头改为 `mov eax,1; ret` 后，整个验证链路（门控、CheckSignature、公钥比较、
+    // LABEL_14 证书信任检查）全部短路，签名 ULF 保持原样即被接受。
+    // 锚点包含函数头 + 配置字段读取 ([rcx+10h] cert、[rcx+18h] checkEnabled) + 双重类型检查，
+    // 对绝对地址（lea rel32）使用 ?? 通配，同发布线内跨小版本兼容。
+    // 注：cmp [rcx],rdx 编码为 48 39 11（ModRM 0x11，rm=rcx），不要误写成 17（那是 [rdi]）。
+    let p1 = find_pattern(&data,
+        "57 56 53 48 83 EC 20 48 8B DA 48 85 DB 74 ?? 48 8B 71 10 40 0F B6 79 18 48 8D 15 ?? ?? ?? ?? 48 39 11 74 ?? 48 8D 15 ?? ?? ?? ?? 48 39 11 75 ?? 48 8B D3"
+    ).ok_or("P1: ValidateSignature wrapper not found")?;
+    patches.push((p1, vec![0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3]));
 
-    // P2: ValidateSignature 签名验证门控 jz → jmp
-    // 直接匹配门控指令及其后续上下文，确保唯一命中。
-    //   test edx,r8d; jz +??; lea r8,[rsp+X]; mov rdx,rax; lea rcx,[rip+...]
-    let p2 = find_pattern(&data,
-        "44 85 C2 74 ?? 4C 8D 44 24 ?? 48 8B D0 48 8D 0D"
-    ).ok_or("P2: ValidateSignature gate not found")? + 3; // +3 → the 0x74 byte
-    patches.push((p2, vec![0xEB, data[p2 as usize + 1]]));
-
-    // P3: sub_14042ADC0 → 始终返回 1（LABEL_14 证书信任检查）
-    // 延长锚点包含第二个 call 的准备指令，避免函数签名相同导致的误匹配。
-    let p3 = find_pattern(&data,
-        "56 53 48 83 EC 28 48 8B D9 48 8B F2 48 8B CB E8 ?? ?? ?? ?? 85 C0 74 ?? 48 8B CB 48 8B D6"
-    ).ok_or("P3: sub_14042ADC0 not found")?;
-    patches.push((p3, vec![0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3]));
-
-    // P4 (可选): BCrypt/NCrypt NTSTATUS→bool → 始终 true，纵深防御
-    for (pat, rep) in [
-        ("85 DB 0F 94 C0 0F B6 C0", [0xB8u8, 0x01, 0x00, 0x00, 0x00, 0x90, 0x90, 0x90]),
-        ("85 DB 0F 94 C3 0F B6 DB", [0xBBu8, 0x01, 0x00, 0x00, 0x00, 0x90, 0x90, 0x90]),
-        ("85 F6 0F 94 C3 0F B6 DB", [0xBBu8, 0x01, 0x00, 0x00, 0x00, 0x90, 0x90, 0x90]),
-    ] {
-        let mut off = 0;
-        while let Some(pos) = find_pattern_at(&data[off..], pat) {
-            patches.push(((off + pos) as u64, rep.to_vec()));
-            off += pos + rep.len();
-        }
-    }
+    // 注：早期补丁已由本单点补丁取代（见 git 历史 / docs）：
+    //   - v2.5.0 起：P1 证书链 / P2 门控 / P3 LABEL_14 / P4 BCrypt-NCrypt（4 补丁）
+    //   - 精简 v1：去掉冗余的 P1/P4（P2+P3 两补丁）
+    //   - 精简 v2（当前）：直接短路 ValidateSignature 包装函数（1 补丁）
 
     // 写入
     let mut f = fs::OpenOptions::new().write(true).open(path).map_err(|e| e.to_string())?;
@@ -540,4 +523,62 @@ pub fn kill_process(name: &str) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 对 6000.7.0a3 原始二进制的副本应用单点补丁
+    /// （ValidateSignature 包装函数 → mov eax,1; ret），
+    /// 验证恰好命中 1 个锚点、1 个写入点，且偏移与文档一致。
+    #[test]
+    fn simplified_patch_applies_to_real_binary() {
+        let src = r"C:/Program Files/Unity/Hub/Editor/6000.7.0a3/Editor/Data/Resources/Licensing/Client/Unity.Licensing.Client.exe.bak";
+        if !Path::new(src).exists() {
+            eprintln!("SKIP: {} not found", src);
+            return;
+        }
+
+        let tmp = std::env::temp_dir().join(format!("unifree_patch_test_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let exe = tmp.join("Unity.Licensing.Client.exe");
+        std::fs::copy(src, &exe).unwrap();
+
+        let result = patch_licensing_client(exe.to_string_lossy().as_ref()).unwrap();
+        assert_eq!(result, "Patched 1 areas", "应恰好应用 1 个补丁");
+
+        // 对比补丁后的 exe 与其自身 .bak，收集所有差异区间
+        let patched = std::fs::read(&exe).unwrap();
+        let original = std::fs::read(format!("{}.bak", exe.to_string_lossy())).unwrap();
+        assert_eq!(patched.len(), original.len(), "补丁不应改变文件大小");
+
+        let mut regions: Vec<(u64, u64)> = Vec::new();
+        let mut i = 0usize;
+        while i < patched.len() {
+            if patched[i] != original[i] {
+                let start = i as u64;
+                let mut end = i;
+                while end < patched.len() && patched[end] != original[end] {
+                    end += 1;
+                }
+                regions.push((start, (end - i) as u64));
+                i = end;
+            } else {
+                i += 1;
+            }
+        }
+
+        // 期望恰好 1 个差异区：
+        //   ValidateSignature 包装函数 @ 0x4F1010 (6B: B8 01 00 00 00 C3 = mov eax,1; ret)
+        assert_eq!(regions, vec![(0x4F1010, 6)],
+            "差异区不符，实际: {:?}", regions);
+
+        // 校验补丁字节：mov eax,1; ret
+        let p1 = &patched[0x4F1010..0x4F1010 + 6];
+        assert_eq!(p1, &[0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3], "包装函数补丁字节不符");
+
+        // 清理临时目录
+        std::fs::remove_dir_all(&tmp).ok();
+    }
 }

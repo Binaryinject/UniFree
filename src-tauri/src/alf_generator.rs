@@ -40,7 +40,7 @@ mod tests {
 
     #[test]
     fn test_generate_alf() {
-        let content = generate_alf_content();
+        let content = generate_alf_content("Unity Pro");
         // v1.0.0 format checks
         assert!(content.contains("<MachineBindings>"));
         assert!(content.contains("<NoHardwareCheck"));
