@@ -1,4 +1,4 @@
-# UniFree 2.5.2
+# UniFree 2.5.7
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -8,7 +8,7 @@
 
 - **Unity Hub Patching** - Bypass license validation via JavaScript patching (UniHacker method)
 - **Unity Editor Patching** - Version-aware patching to bypass signature verification
-  - Unity 6000.7+: **Native AOT binary patching** — byte-level anchors bypass certificate chain, signature gate, and crypto verification
+  - Unity 6000.7+: **Native AOT binary patching** — 1 byte-level anchor short-circuits `ValidateSignature` entirely
   - Unity 6000.0-6000.6: replaces `Unity.Licensing.EntitlementResolver.dll`
   - Unity 2019-2022: replaces `System.Security.Cryptography.Xml.dll`
 - **License Generation** - Generate RSA-signed Unity Pro license files from hardware info
@@ -52,7 +52,7 @@ Version-aware patching that bypasses `ValidateSignature`:
 
 | Unity Version | Target File | Method |
 |---------------|------------|--------|
-| **6000.7+** | `Unity.Licensing.Client.exe` | **Byte-level anchor-based patching** (4 patches: cert chain, signature gate, LABEL_14 check, BCrypt/NCrypt) |
+| **6000.7+** | `Unity.Licensing.Client.exe` | **Byte-level anchor-based patching** (1 patch: `ValidateSignature` wrapper → always valid) |
 | 6000.0-6000.6 | `Unity.Licensing.EntitlementResolver.dll` | Pre-patched DLL replacement |
 | 2019-2022 | `System.Security.Cryptography.Xml.dll` | Pre-patched DLL replacement |
 
@@ -73,7 +73,7 @@ For 6000.7+, the binary is .NET 10 Native AOT compiled (no IL). Patches use patt
 |-----------|------|--------|
 | Hub | `app.asar` | Extract to `app/`, patch JS, rename to `.bak` |
 | Hub | `hubConfig.json` | Update sign-in and update settings |
-| Editor (6000.7+) | `Unity.Licensing.Client.exe` | Byte-level binary patch (4 anchor-based patches) |
+| Editor (6000.7+) | `Unity.Licensing.Client.exe` | Byte-level binary patch (1 anchor-based patch) |
 | Editor (6000.0-6000.6) | `Unity.Licensing.EntitlementResolver.dll` | Replace with pre-patched DLL |
 | Editor (2019-2022) | `System.Security.Cryptography.Xml.dll` | Replace with pre-patched DLL |
 | License | `C:\ProgramData\Unity\Unity_lic.ulf` | Generate RSA-signed license file |
@@ -120,9 +120,24 @@ MIT License - See [LICENSE](LICENSE) for details
 
 ---
 
-**UniFree 2.5.2** - Unity License Freedom Tool
+**UniFree 2.5.7** - Unity License Freedom Tool
 
 ## Changelog
+
+### v2.5.7
+- **6000.7+ patch simplified to a single byte-level patch**: short-circuits the `ValidateSignature` wrapper (`sub_1404F1C10`) with `mov eax,1; ret`, replacing the previous 2-patch (signature gate + LABEL_14 trust check) and the original 4-patch approach
+- IDA-verified: the wrapper's return value is ignored by the parser (failure throws), so one function-head patch bypasses the entire validation chain while keeping the RSA-signed ULF unchanged
+- Anchor now targets the config-field reads + dual type checks; cross-minor-version compatible within the same release line
+- Regression test applies the patch to a real binary copy and asserts exactly one write site
+
+### v2.5.6
+- Fix updater: batch file polls PID before install, then restarts
+
+### v2.5.5
+- Fix updater: raw process restart after install
+
+### v2.5.4
+- Fix updater: run NSIS installer in-process then restart
 
 ### v2.5.3
 - Fix updater: use PowerShell script for reliable silent install + restart (handles paths with spaces correctly)

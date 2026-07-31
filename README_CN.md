@@ -1,4 +1,4 @@
-# UniFree 2.5.2
+# UniFree 2.5.7
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -8,7 +8,7 @@
 
 - **Unity Hub 补丁** - 通过 JavaScript 补丁绕过许可证验证（UniHacker 方法）
 - **Unity Editor 补丁** - 版本感知补丁，绕过签名验证
-  - Unity 6000.7+：**Native AOT 二进制补丁** — 字节级锚点定位，绕过证书链、签名门控和加密验证
+  - Unity 6000.7+：**Native AOT 二进制补丁** — 1 个字节级锚点，直接短路整个 ValidateSignature 验证
   - Unity 6000.0-6000.6：替换 `Unity.Licensing.EntitlementResolver.dll`
   - Unity 2019-2022：替换 `System.Security.Cryptography.Xml.dll`
 - **许可证生成** - 从硬件信息生成 RSA 签名的 Unity Pro 许可证文件
@@ -52,7 +52,7 @@ UniFree 提取 `app.asar` 并补丁 JavaScript 文件以绕过许可证验证：
 
 | Unity 版本 | 目标文件 | 方法 |
 |------------|----------|------|
-| **6000.7+** | `Unity.Licensing.Client.exe` | **字节级锚点补丁**（4 个补丁：证书链、签名门控、LABEL_14 检查、BCrypt/NCrypt） |
+| **6000.7+** | `Unity.Licensing.Client.exe` | **字节级锚点补丁**（1 个补丁：ValidateSignature 包装函数 → 恒为有效） |
 | 6000.0-6000.6 | `Unity.Licensing.EntitlementResolver.dll` | 预补丁 DLL 替换 |
 | 2019-2022 | `System.Security.Cryptography.Xml.dll` | 预补丁 DLL 替换 |
 
@@ -73,7 +73,7 @@ UniFree 提取 `app.asar` 并补丁 JavaScript 文件以绕过许可证验证：
 |------|------|------|
 | Hub | `app.asar` | 提取到 `app/`，补丁 JS，重命名为 `.bak` |
 | Hub | `hubConfig.json` | 更新登录和更新设置 |
-| Editor (6000.7+) | `Unity.Licensing.Client.exe` | 字节级二进制补丁（4 个锚点补丁） |
+| Editor (6000.7+) | `Unity.Licensing.Client.exe` | 字节级二进制补丁（1 个锚点补丁） |
 | Editor (6000.0-6000.6) | `Unity.Licensing.EntitlementResolver.dll` | 替换为预补丁 DLL |
 | Editor (2019-2022) | `System.Security.Cryptography.Xml.dll` | 替换为预补丁 DLL |
 | License | `C:\ProgramData\Unity\Unity_lic.ulf` | 生成 RSA 签名的许可证文件 |
@@ -120,9 +120,30 @@ MIT 许可证 - 详见 [LICENSE](LICENSE)
 
 ---
 
-**UniFree 2.5.2** - Unity 许可证自由工具
+**UniFree 2.5.7** - Unity 许可证自由工具
 
 ## 更新日志
+
+### v2.5.7
+- **6000.7+ 补丁精简为单个字节级补丁**：将 `ValidateSignature` 包装函数（sub_1404F1C10）
+  头部改为 `mov eax,1; ret`，取代此前的 2 补丁（签名门控 + LABEL_14 信任检查）和最初的
+  4 补丁方案
+- IDA 实证：Parse 调用该包装函数但忽略返回值（失败靠异常中断），一个函数头补丁即可短路
+  整个验证链路，RSA 签名 ULF 保持不变
+- 锚点针对配置字段读取 + 双重类型检查，同发布线内跨小版本兼容
+- 回归测试在真实二进制副本上应用补丁，断言恰好 1 个写入点
+
+### v2.5.6
+- 修复自动更新：批处理文件在安装前轮询 PID，安装后重启
+
+### v2.5.5
+- 修复自动更新：安装后原始进程重启
+
+### v2.5.4
+- 修复自动更新：进程内运行 NSIS 安装器后重启
+
+### v2.5.3
+- 修复自动更新：使用 PowerShell 脚本可靠静默安装 + 重启（正确处理含空格路径）
 
 ### v2.5.2
 - 修复自动更新：使用 `ping` 延时 + `start /wait` 确保静默安装完成后自动重启

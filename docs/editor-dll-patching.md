@@ -43,13 +43,15 @@ Unity Editor 使用 `Unity.Licensing.EntitlementResolver.dll`（< 6000.7）或
 ```
 UlfLicense.Parse()
   → XmlReader.Read()
-    → XmlExtensions.ValidateSignature(doc, cert, checkEnabled, ...)
+    → [前置] sub_1404F1360 检查文档含 <Signature> 元素（无签名 ULF 在此被拒）
+    → XmlExtensions.ValidateSignature 包装函数 (sub_1404F1C10)
+        ↑ ★ 唯一补丁点：函数头 → mov eax,1; ret
+        ↑ Parse 调用它但忽略返回值；失败路径通过异常/__debugbreak 中断。
+        ↑ 短路后以下整条验证链路不再执行：
       │
       ├─[门控] if (!hasSignature || !checkEnabled) → 跳到 LABEL_14
-      │         ↑ P2 将此 jz 改为 jmp，强制跳过整个签名验证分支
       │
       ├─ CheckSignature()  → BCryptVerifySignature / NCryptVerifySignature
-      │                      ↑ P4 将 NTSTATUS→bool 转换改为始终返回 true
       │
       ├─ 时间检查 (NotBefore / NotAfter)
       │
@@ -58,30 +60,27 @@ UlfLicense.Parse()
       │   ⚠️ UniFree 使用随机 RSA 密钥对，此比较永远失败！
       │
       └─[LABEL_14] sub_14042AE40(doc, cert, a3=1)
-           └─ sub_14042ADC0(doc, cert)
-              ├─ sub_14042BD80()  检查 #1
-              ├─ sub_14042BDD0()  检查 #2
-              ├─ sub_14042BB80()  检查 #3
-              └─ sub_14042D020()  最终处理
-              ↑ P3 将函数头改为 mov eax,1; ret，跳过所有检查
+           └─ sub_14042ADC0(doc, cert) ← 早期版本的 P3 目标
 ```
+
+**单点补丁原理**：Parse 流程在 `sub_140738C80` 中以硬编码 `a3=1` 调用 ValidateSignature
+包装函数，但**忽略其返回值**——该函数的失败路径靠抛异常中断。把包装函数头改成
+`mov eax,1; ret` 后，整个验证链路全部短路，签名 ULF 原样通过。
 
 ### 补丁一览
 
 | Patch | 位置 (函数/指令) | 锚点模式 | 补丁内容 |
 |-------|-----------------|---------|---------|
-| **P1** | `CertVerifyCertificateChainPolicy` 调用点 | `C7 44 24 ?? 10 00 00 00 89 54 24 ??` → +0x34 | call→mov eax,0x10101; jmp; nop; nop |
-| **P2** | ValidateSignature 门控 `jz` | `44 85 C2 74 ?? 4C 8D 44 24 ?? 48 8B D0 48 8D 0D` → +3 | `74` → `EB`（jz → jmp） |
-| **P3** | `sub_14042ADC0` 函数头 | `56 53 48 83 EC 28 48 8B D9 48 8B F2 48 8B CB E8 ?? ?? ?? ?? 85 C0 74 ?? 48 8B CB 48 8B D6` | 函数头 6 字节 → `B8 01 00 00 00 C3`（mov eax,1; ret） |
-| **P4** | BCrypt/NCrypt NTSTATUS 返回点（5 处） | 全文件扫描 `test/setz/movzx` 模式 | mov reg,1; nop... |
+| **P1** | `ValidateSignature` 包装函数 `sub_1404F1C10` 函数头 | `57 56 53 48 83 EC 20 48 8B DA 48 85 DB 74 ?? 48 8B 71 10 40 0F B6 79 18 48 8D 15 ?? ?? ?? ?? 48 39 11 74 ?? 48 8D 15 ?? ?? ?? ?? 48 39 11 75 ?? 48 8B D3` | 函数头 6 字节 → `B8 01 00 00 00 C3`（mov eax,1; ret） |
 
-**P2 + P3 是核心**，P1 + P4 是纵深防御。
+**单个补丁即为完整方案**。历史版本为 4 补丁（P1 证书链 / P2 门控 / P3 LABEL_14 /
+P4 BCrypt），先精简为 P2+P3，再演进为当前的单点包装函数补丁。详见更新日志。
 
 ### 已验证版本
 
 | 版本 | 文件大小 | 补丁结果 |
 |------|---------|---------|
-| 6000.7.0a3 | 22,086,568 bytes | ✅ 全部 4 个 patch 应用成功 |
+| 6000.7.0a3 | 22,086,568 bytes | ✅ 单点补丁应用成功（1 个写入点，自动测试验证） |
 
 ### 排查方法
 
@@ -203,14 +202,7 @@ fn main() {
 
 | Patch | 文件偏移 | 原始字节 | 补丁字节 |
 |-------|---------|---------|---------|
-| P1 | 0x40D22B | E8...85C07418... | B801010000EB139090 |
-| P2 | 0x4F02D9 | 74 46 | EB 46 |
-| P3 | 0x42A1C0 | 56534883EC28 | B801000000C3 |
-| P4a | 0x3C22E8 | 85DB0F94C00FB6C0 | B801000000909090 |
-| P4b | 0x3C244B | 85DB0F94C00FB6C0 | B801000000909090 |
-| P4c | 0x3F9483 | 85DB0F94C30FB6DB | BB01000000909090 |
-| P4d | 0x3FEEC9 | 85F60F94C30FB6DB | BB01000000909090 |
-| P4e | 0x3FF0FD | 85F60F94C30FB6DB | BB01000000909090 |
+| P1 (包装函数) | 0x4F1010 | 5756534883EC20 | B801000000C3 |
 
 ---
 
@@ -276,6 +268,14 @@ fn main() {
 
 ## 更新日志
 
+- 2026-07-31: 精简为单点补丁 —— 直接短路 ValidateSignature 包装函数 (sub_1404F1C10)。
+  逆向确认：Parse 调用它但忽略返回值，失败靠异常中断；前置检查 sub_1404F1360 要求文档
+  必须含 `<Signature>` 元素（无签名 ULF 不可行），因此保留签名 ULF、只打这一个函数头。
+  锚点含配置字段读取 + 双重类型检查，唯一命中。注意 `cmp [rcx],rdx` 编码为 `48 39 11`
+  （ModRM 0x11，rm=rcx），误写 17 会匹配失败。
+- 2026-07-31: 精简为 P2+P3 两个补丁。IDA 实证确认：P1 仅经 sub_14042AE40 的 a3==0
+  分支可达（本工具不走）；P4 的字节模式全文件命中 19 处（含无关函数），全量打补丁会
+  误改代码。移除后补丁点从 21 个写入点降到 2 个。
 - 2026-07-28: 完成 Unity 6000.7+ Native AOT 字节级补丁（4 个 patch 点），更新文档
 - 2026-07-04: 添加离线二进制补丁工具（tools/patch-dll），按版本组织 DLL
 - 2026-07-04: 简化为直接使用预编译 DLL，移除二进制补丁逻辑
