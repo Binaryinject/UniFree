@@ -257,7 +257,71 @@ fn main() {
 | DLL 版本 | 文件大小 | 补丁方法 |
 |---------|---------|---------|
 | 1.18.1 (Editor) | ~341KB | 预编译 DLL |
-| 1.17.4 (Hub) | ~514KB | 不兼容，需 asar 补丁 |
+| 1.17.4 (Hub) | ~514KB | 不兼容，需 asar 补丁（JS-only，见下） |
+
+---
+
+## Unity Hub 补丁（Hub 3.20.0+）
+
+### 为什么旧的"解包 asar"方法失效了
+
+Hub 3.20.0（Electron 43.2.0）的二进制里带 **`OnlyLoadAppFromAsar` fuse**，
+强制只能从 `app.asar` 加载应用。旧式 UniHacker 方法（把 `app.asar` 改名成 `.bak`、
+解包到 `resources/app/` 让 Electron 从目录加载）会导致 **Hub 启动立即退出
+（exit code 1，无任何日志）**。
+
+证据：二进制可搜到 `IsOnlyLoadAppFromAsarEnabled@fuses@electron` 符号；
+实测改名后 Hub 启动 10 秒内退出，stdout/stderr 全空。
+
+### Hub 3.20.0 的许可证架构
+
+Hub 3.20.0 用独立的 licensing client（`UnityLicensingClient_V1\Unity.Licensing.Client.exe`，
+managed .NET 自包含，LocalIPC **1.17.4**）。签名校验在
+`Unity.Licensing.EntitlementResolver.dll`（1.17.4，514KB，**托管 IL DLL**），
+**不是** Editor 6000.7+ 的 Native AOT exe —— doc 里 P1 单点补丁
+（`mov eax,1; ret`）不适用于 Hub。
+
+日志位置：
+- `%LOCALAPPDATA%\Unity\Unity.Licensing.Client.log`：`The digital signature is invalid.`
+  @ `Unity.Licensing.EntitlementResolver.Xml.XmlExtensions.ValidateSignature` → `Processed 0 license files`
+- `%APPDATA%\UnityHub\logs\info-log.json`（Hub 自己的日志）：`Invalid license file: ... reason: The digital signature in the license is invalid.`
+
+### JS-only 补丁（当前方案）
+
+`src-tauri/src/patcher.rs` → `patch_hub()` / `flip_hub_exe_fuses()` / `rewrite_hub_asar()`
+
+Hub 3.20.0 的 exe 有**两个 fuse 全开**，必须一起处理：
+
+| Fuse | 作用 | 处理 |
+|------|------|------|
+| `OnlyLoadAppFromAsar` (5) | 只能从 app.asar 加载 | 保持 app.asar 存在即可（不处理） |
+| `EnableEmbeddedAsarIntegrityValidation` (4) | 校验 app.asar 头 JSON 的 SHA256 | **翻转为 0**（见下） |
+
+**步骤：**
+
+1. **翻转 exe fuse**：`flip_hub_exe_fuses()` 把 `EnableEmbeddedAsarIntegrityValidation`
+   （wire 段 fuse 4）从 `'1'` 改成 `'0'`。wire 格式 `[magic][version=01][length=09][9 个 ASCII '0'/'1' 字节]`，
+   fuse4 字节在 magic 后 `2+4` 处。首次修改前备份 exe 为 `<exe>.bak`。
+   否则改动 asar 会触发 `FATAL: Integrity check failed for asar archive`。
+2. **完整重建 app.asar**：`rewrite_hub_asar()` 重建数据区 + header，
+   **手动保留 10 个 unpacked native 模块的 `unpacked: true` 标记**（不写入数据区，
+   Electron 仍从 `app.asar.unpacked/` 加载）。允许任意改 JS 内容：
+   - `licenseQueryService.getLicense()` → 返回假的 **Unity Pro ULF** 许可证数组
+     （`{label:'Unity Pro', licenseType:'ULF', valid:true, activated:true, ...}`），
+     让 Hub 的许可证页面/状态**显示**出来；
+   - `licenseService` / `licenseQueryService` 的 `isLicenseValid()` → `return true;`；
+   - `DefaultLocalConfig-*.js` 的 `DisableSignIn/DisableAutoUpdate` → `true`。
+3. **不替换任何 DLL**（不再碰 `System.Security.Cryptography.Xml.dll` 或
+   `Unity.Licensing.EntitlementResolver.dll`）。
+
+⚠️ **不要用 AsarWriter 重建整个 asar**：它会丢掉 10 个 native 模块的
+`unpacked: true` 标记，导致 Electron 不再把 `app.asar/node_modules/**/*.node`
+重定向到 `app.asar.unpacked/`，报 `Cannot find native binding ... keyring...node`。
+重建时需自己按 `{"size":N,"unpacked":true}` 保留这些条目。
+
+补丁后 Hub 许可证页会显示 **"Unity Pro"**（数据来自 getLicense 假对象）、正常启动；
+licensing client 进程仍会因原始 DLL 报 "signature invalid"，但 JS 层已绕过，不影响 UI 显示。
+启动 Editor 时走 Editor 自己的补丁（< 6000.7 IL DLL / >= 6000.7 Native AOT）。
 
 ## 相关文件
 
@@ -268,6 +332,15 @@ fn main() {
 
 ## 更新日志
 
+- 2026-08-03: Hub 3.20.0+ 改 JS-only 就地重建 asar 补丁 + exe fuse 翻转。
+  根因有两层：(1) Hub 3.20.0 (Electron 43) 带 `OnlyLoadAppFromAsar` + 
+  `EnableEmbeddedAsarIntegrityValidation` 双 fuse，旧"解包 app/ + 改名 .bak"直接退出，
+  重建 asar 又触发 Integrity FATAL；(2) Hub 签名校验在托管 IL DLL
+  `Unity.Licensing.EntitlementResolver.dll` (1.17.4)，与 Editor 6000.7+ Native AOT
+  是两套架构。最终方案：`flip_hub_exe_fuses()` 翻转完整性 fuse → 
+  `rewrite_hub_asar()` 完整重建 asar（手动保留 unpacked 标记），
+  patch `getLicense()` 返回假 Unity Pro ULF（让 Hub UI 显示许可证）+ `isLicenseValid()` → true。
+  不替换 DLL、不落地解包。
 - 2026-07-31: 精简为单点补丁 —— 直接短路 ValidateSignature 包装函数 (sub_1404F1C10)。
   逆向确认：Parse 调用它但忽略返回值，失败靠异常中断；前置检查 sub_1404F1360 要求文档
   必须含 `<Signature>` 元素（无签名 ULF 不可行），因此保留签名 ULF、只打这一个函数头。

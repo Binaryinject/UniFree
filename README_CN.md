@@ -1,4 +1,4 @@
-# UniFree 2.5.7
+# UniFree 2.6.0
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -36,7 +36,7 @@
 
 ### Hub 补丁（JavaScript 方法）
 
-UniFree 提取 `app.asar` 并补丁 JavaScript 文件以绕过许可证验证：
+UniFree 就地重建 `app.asar`（保留 `app.asar.unpacked/` 里的 native 模块）并补丁 JavaScript 文件以绕过许可证验证；同时翻转 Hub exe 里的 Electron `EnableEmbeddedAsarIntegrityValidation` fuse，否则改动 asar 会触发启动崩溃：
 
 | 文件 | 补丁 |
 |------|------|
@@ -71,7 +71,8 @@ UniFree 提取 `app.asar` 并补丁 JavaScript 文件以绕过许可证验证：
 
 | 组件 | 文件 | 操作 |
 |------|------|------|
-| Hub | `app.asar` | 提取到 `app/`，补丁 JS，重命名为 `.bak` |
+| Hub | `app.asar` | 就地重建（保留 unpacked 标记），补丁 `getLicense`/`isLicenseValid` |
+| Hub | `Unity Hub.exe` | 翻转 Electron `EnableEmbeddedAsarIntegrityValidation` fuse |
 | Hub | `hubConfig.json` | 更新登录和更新设置 |
 | Editor (6000.7+) | `Unity.Licensing.Client.exe` | 字节级二进制补丁（1 个锚点补丁） |
 | Editor (6000.0-6000.6) | `Unity.Licensing.EntitlementResolver.dll` | 替换为预补丁 DLL |
@@ -120,9 +121,22 @@ MIT 许可证 - 详见 [LICENSE](LICENSE)
 
 ---
 
-**UniFree 2.5.7** - Unity 许可证自由工具
+**UniFree 2.6.0** - Unity 许可证自由工具
 
 ## 更新日志
+
+### v2.6.0
+- **支持 Unity Hub 3.20.0+**：Hub 的 Electron 带了 `OnlyLoadAppFromAsar` + 
+  `EnableEmbeddedAsarIntegrityValidation` 双 fuse，旧"解包到 app/"和任何 asar 改动都会失败
+  （启动即退出 / Integrity FATAL）。
+  - `flip_hub_exe_fuses()` 翻转 `Unity Hub.exe` 里的 asar 完整性 fuse（Electron fuse wire：
+    `[magic][ver=01][len=09][ASCII '0'/'1']`，fuse 4）
+  - `rewrite_hub_asar()` 就地重建 `app.asar` 并**保留 10 个 unpacked native 模块标记**
+    （AsarWriter 会丢掉 → 报 `Cannot find native binding`）
+  - patch `licenseQueryService.getLicense()` 返回假的 Unity Pro ULF，让 Hub **显示**许可证；
+    `isLicenseValid()` → true
+- Hub 的 licensing client（managed .NET，`EntitlementResolver.dll` 1.17.4）与 Editor 6000.7+
+  Native AOT 是两套架构；不替换任何 DLL。
 
 ### v2.5.7
 - **6000.7+ 补丁精简为单个字节级补丁**：将 `ValidateSignature` 包装函数（sub_1404F1C10）
