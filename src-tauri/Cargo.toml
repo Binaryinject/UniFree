@@ -1,6 +1,6 @@
 [package]
 name = "unifree"
-version = "2.5.7"
+version = "2.6.0"
 edition = "2024"
 
 [lib]

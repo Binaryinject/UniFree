@@ -1,7 +1,7 @@
 {
   "name": "unifree",
   "private": true,
-  "version": "2.5.7",
+  "version": "2.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1421 --strictPort",

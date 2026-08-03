@@ -1,4 +1,4 @@
-# UniFree 2.5.7
+# UniFree 2.6.0
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -36,7 +36,7 @@ Download the latest release from [Releases](https://github.com/Binaryinject/UniF
 
 ### Hub Patching (JavaScript Method)
 
-UniFree extracts `app.asar` and patches JavaScript files to bypass license validation:
+UniFree rebuilds `app.asar` in-place (preserving `app.asar.unpacked/` native modules) and patches JavaScript files to bypass license validation. It also flips the `EnableEmbeddedAsarIntegrityValidation` fuse in the Hub executable, otherwise modifying the asar crashes the Hub on startup:
 
 | File | Patch |
 |------|-------|
@@ -71,7 +71,8 @@ For 6000.7+, the binary is .NET 10 Native AOT compiled (no IL). Patches use patt
 
 | Component | File | Action |
 |-----------|------|--------|
-| Hub | `app.asar` | Extract to `app/`, patch JS, rename to `.bak` |
+| Hub | `app.asar` | Rebuild in-place (preserve unpacked markers), patch `getLicense`/`isLicenseValid` |
+| Hub | `Unity Hub.exe` | Flip Electron `EnableEmbeddedAsarIntegrityValidation` fuse |
 | Hub | `hubConfig.json` | Update sign-in and update settings |
 | Editor (6000.7+) | `Unity.Licensing.Client.exe` | Byte-level binary patch (1 anchor-based patch) |
 | Editor (6000.0-6000.6) | `Unity.Licensing.EntitlementResolver.dll` | Replace with pre-patched DLL |
@@ -120,9 +121,16 @@ MIT License - See [LICENSE](LICENSE) for details
 
 ---
 
-**UniFree 2.5.7** - Unity License Freedom Tool
+**UniFree 2.6.0** - Unity License Freedom Tool
 
 ## Changelog
+
+### v2.6.0
+- **Unity Hub 3.20.0+ support**: Hub now ships Electron with `OnlyLoadAppFromAsar` + `EnableEmbeddedAsarIntegrityValidation` fuses, breaking both the old "extract to `app/`" and any asar modification (integrity FATAL).
+  - `flip_hub_exe_fuses()` disables the asar-integrity fuse in `Unity Hub.exe` (Electron fuse wire: `[magic][ver=01][len=09][ASCII bits]`, fuse 4).
+  - `rewrite_hub_asar()` rebuilds `app.asar` in-place while preserving the 10 `unpacked` native-module markers (AsarWriter would drop them → `Cannot find native binding`).
+  - Patches `licenseQueryService.getLicense()` to return a fake Unity Pro ULF so the Hub **displays** the license, plus `isLicenseValid()` → `true`.
+- Hub licensing client (managed .NET, `EntitlementResolver.dll` 1.17.4) is a different architecture from Editor 6000.7+ Native AOT; no DLL is replaced.
 
 ### v2.5.7
 - **6000.7+ patch simplified to a single byte-level patch**: short-circuits the `ValidateSignature` wrapper (`sub_1404F1C10`) with `mov eax,1; ret`, replacing the previous 2-patch (signature gate + LABEL_14 trust check) and the original 4-patch approach
