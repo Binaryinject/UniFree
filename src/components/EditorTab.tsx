@@ -109,7 +109,7 @@ export default function EditorTab({ addLog }: Props) {
           await invoke("kill_process", { name: "Unity.exe" });
           await new Promise((r) => setTimeout(r, 1000));
         }
-        await invoke("patch_editor_dll", { dllPath: editor.dll_path });
+        await invoke("patch_editor_dll", { dllPath: editor.dll_path, version: editor.version });
         addLog("success", `[${editor.version}] ${t("editor.patch")} ✓`);
         try {
           const result = await invoke<string>("copy_license");
@@ -159,7 +159,7 @@ export default function EditorTab({ addLog }: Props) {
     for (const e of targets) {
       try {
         if (action === "patch") {
-          await invoke("patch_editor_dll", { dllPath: e.dll_path });
+          await invoke("patch_editor_dll", { dllPath: e.dll_path, version: e.version });
           addLog("success", `[${e.version}] ${t("editor.patch")} ✓`);
         } else {
           await invoke("restore_dll", { dllPath: e.dll_path });

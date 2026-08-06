@@ -41,33 +41,6 @@ pub fn hub_app_data() -> PathBuf {
     }
 }
 
-fn is_version_folder(name: &str) -> bool {
-    let bytes = name.as_bytes();
-    if bytes.is_empty() || !bytes[0].is_ascii_digit() {
-        return false;
-    }
-    let mut dots = 0;
-    let mut digits_before_dot = 0;
-    let mut has_channel = false;
-    for &b in bytes {
-        if b == b'.' {
-            if digits_before_dot == 0 { return false; }
-            dots += 1;
-            digits_before_dot = 0;
-        } else if b.is_ascii_digit() {
-            digits_before_dot += 1;
-        } else if matches!(b, b'a' | b'b' | b'f' | b'p' | b'c') {
-            has_channel = true;
-            break;
-        } else if b == b'-' {
-            break;
-        } else {
-            return false;
-        }
-    }
-    dots >= 2 && has_channel
-}
-
 fn editor_exe_for_folder(folder: &PathBuf) -> PathBuf {
     #[cfg(target_os = "windows")]
     { folder.join("Editor").join("Unity.exe") }
@@ -79,7 +52,11 @@ fn editor_exe_for_folder(folder: &PathBuf) -> PathBuf {
 
 /// Check if version uses Native AOT Unity.Licensing.Client.exe (>= 6000.7)
 fn is_native_aot_editor(version: &str) -> bool {
-    let parts: Vec<&str> = version.split('.').collect();
+    let normalized = version
+        .split(|c: char| !c.is_ascii_digit() && c != '.')
+        .find(|token| !token.is_empty() && token.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .unwrap_or(version);
+    let parts: Vec<&str> = normalized.split('.').collect();
     if parts.len() < 2 {
         return false;
     }
@@ -93,12 +70,16 @@ fn is_native_aot_editor(version: &str) -> bool {
 /// 6000.0-6000.6: Unity.Licensing.EntitlementResolver.dll
 /// < 6000: System.Security.Cryptography.Xml.dll
 fn target_file_name_for_version(version_folder: &str) -> &'static str {
-    if is_native_aot_editor(version_folder) {
+    let normalized = version_folder
+        .split(|c: char| !c.is_ascii_digit() && c != '.')
+        .find(|token| !token.is_empty() && token.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .unwrap_or(version_folder);
+    if is_native_aot_editor(normalized) {
         #[cfg(target_os = "windows")]
         { "Unity.Licensing.Client.exe" }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         { "Unity.Licensing.Client" }
-    } else if version_folder.starts_with("6") {
+    } else if normalized.starts_with('6') {
         "Unity.Licensing.EntitlementResolver.dll"
     } else {
         "System.Security.Cryptography.Xml.dll"
@@ -113,7 +94,15 @@ fn dll_path_for_folder(folder: &PathBuf) -> PathBuf {
     let version = folder.file_name().unwrap_or_default().to_string_lossy();
     let target_name = target_file_name_for_version(&version);
     #[cfg(target_os = "windows")]
-    { folder.join("Editor").join("Data").join("Resources").join("Licensing").join("Client").join(target_name) }
+    {
+        let client = folder.join("Editor").join("Data").join("Resources").join("Licensing").join("Client");
+        let preferred = client.join(target_name);
+        if preferred.exists() { preferred } else if client.join("Unity.Licensing.Client.exe").exists() {
+            client.join("Unity.Licensing.Client.exe")
+        } else {
+            client.join("System.Security.Cryptography.Xml.dll")
+        }
+    }
     #[cfg(target_os = "macos")]
     { folder.join("Contents").join("Resources").join("Licensing").join("Client").join(target_name) }
     #[cfg(target_os = "linux")]
@@ -140,6 +129,22 @@ fn read_product_name(folder: &PathBuf) -> String {
     "Unity".to_string()
 }
 
+#[cfg(target_os = "windows")]
+fn read_unity_exe_version(exe: &PathBuf) -> Option<String> {
+    use std::process::Command;
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-Command", "(Get-Item -LiteralPath $env:UNIFREE_EXE).VersionInfo.ProductVersion"])
+        .env("UNIFREE_EXE", exe)
+        .output()
+        .ok()?;
+    if !output.status.success() { return None; }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!version.is_empty()).then_some(version)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn read_unity_exe_version(_exe: &PathBuf) -> Option<String> { None }
+
 fn read_architecture(folder: &PathBuf) -> String {
     let metadata = folder.join("metadata.hub.json");
     if let Ok(content) = fs::read_to_string(&metadata) {
@@ -162,15 +167,15 @@ fn scan_folder(base: &PathBuf) -> Vec<EditorInfo> {
         Err(_) => return editors,
     };
     for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if !is_version_folder(&name) {
-            continue;
-        }
         let folder = entry.path();
         let exe = editor_exe_for_folder(&folder);
         if !exe.exists() {
             continue;
         }
+        let version = match read_unity_exe_version(&exe) {
+            Some(version) => version,
+            None => continue,
+        };
         let dll = dll_path_for_folder(&folder);
         let dll_status = if dll.exists() {
             patcher::get_editor_dll_status(dll.to_string_lossy().as_ref())
@@ -178,7 +183,7 @@ fn scan_folder(base: &PathBuf) -> Vec<EditorInfo> {
             "not_found".into()
         };
         editors.push(EditorInfo {
-            version: name,
+            version,
             path: exe.to_string_lossy().to_string(),
             dll_path: dll.to_string_lossy().to_string(),
             dll_status,
@@ -302,7 +307,17 @@ fn derive_dll_from_exe(exe: &PathBuf) -> PathBuf {
             .unwrap_or_default();
         let dll_name = dll_name_for_version(&version);
         #[cfg(target_os = "windows")]
-        { editor_dir.join("Data").join("Resources").join("Licensing").join("Client").join(dll_name) }
+        {
+            let client = editor_dir.join("Data").join("Resources").join("Licensing").join("Client");
+            let preferred = client.join(dll_name);
+            if preferred.exists() { preferred } else if client.join("Unity.Licensing.Client.exe").exists() {
+                client.join("Unity.Licensing.Client.exe")
+            } else if client.join("Unity.Licensing.EntitlementResolver.dll").exists() {
+                client.join("Unity.Licensing.EntitlementResolver.dll")
+            } else {
+                client.join("System.Security.Cryptography.Xml.dll")
+            }
+        }
         #[cfg(target_os = "macos")]
         {
             if let Some(app_dir) = editor_dir.parent().and_then(|p| p.parent()) {
@@ -389,10 +404,9 @@ pub fn scan_installed_editors() -> Vec<EditorInfo> {
             continue;
         }
         // Try as a direct version folder (e.g., D:\Unity\2022.3.1f1)
-        let folder_name = path.file_name().unwrap_or_default().to_string_lossy();
-        if is_version_folder(&folder_name) {
-            let exe = editor_exe_for_folder(&path);
-            if exe.exists() {
+        let exe = editor_exe_for_folder(&path);
+        if exe.exists() {
+            if let Some(version) = read_unity_exe_version(&exe) {
                 let dll = dll_path_for_folder(&path);
                 let dll_status = if dll.exists() {
                     patcher::get_editor_dll_status(dll.to_string_lossy().as_ref())
@@ -400,7 +414,7 @@ pub fn scan_installed_editors() -> Vec<EditorInfo> {
                     "not_found".into()
                 };
                 let info = EditorInfo {
-                    version: folder_name.to_string(),
+                    version,
                     path: exe.to_string_lossy().to_string(),
                     dll_path: dll.to_string_lossy().to_string(),
                     dll_status,
