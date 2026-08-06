@@ -1,4 +1,4 @@
-# UniFree 2.6.0
+# UniFree 2.6.1
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -121,9 +121,14 @@ MIT 许可证 - 详见 [LICENSE](LICENSE)
 
 ---
 
-**UniFree 2.6.0** - Unity 许可证自由工具
+**UniFree 2.6.1** - Unity 许可证自由工具
 
 ## 更新日志
+
+### v2.6.1
+- 从 `Unity.exe` 文件信息读取编辑器版本，不再依赖安装目录名称。
+- 支持重命名目录和非 Unity Hub 安装的编辑器，包括 Unity 6000.3.x 目录结构。
+- 根据实际目标文件名选择补丁，同时在界面中保留完整版本号。
 
 ### v2.6.0
 - **支持 Unity Hub 3.20.0+**：Hub 的 Electron 带了 `OnlyLoadAppFromAsar` + 

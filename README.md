@@ -1,4 +1,4 @@
-# UniFree 2.6.0
+# UniFree 2.6.1
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -121,9 +121,14 @@ MIT License - See [LICENSE](LICENSE) for details
 
 ---
 
-**UniFree 2.6.0** - Unity License Freedom Tool
+**UniFree 2.6.1** - Unity License Freedom Tool
 
 ## Changelog
+
+### v2.6.1
+- Detect Unity Editor versions from `Unity.exe` file metadata instead of installation folder names.
+- Support renamed and non-Hub Unity installations, including Unity 6000.3.x layouts.
+- Select licensing targets by their actual filename while preserving the exact detected version in the UI.
 
 ### v2.6.0
 - **Unity Hub 3.20.0+ support**: Hub now ships Electron with `OnlyLoadAppFromAsar` + `EnableEmbeddedAsarIntegrityValidation` fuses, breaking both the old "extract to `app/`" and any asar modification (integrity FATAL).
