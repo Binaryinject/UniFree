@@ -39,8 +39,8 @@ pub fn check_hub_config_status() -> String {
 }
 
 #[command]
-pub fn patch_editor_dll(dll_path: String) -> Result<String, String> {
-    patcher::patch_entitlement_resolver(&dll_path)
+pub fn patch_editor_dll(dll_path: String, version: Option<String>) -> Result<String, String> {
+    patcher::patch_entitlement_resolver(&dll_path, version.as_deref())
 }
 
 #[command]
