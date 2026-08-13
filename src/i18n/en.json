@@ -105,6 +105,7 @@
     "download": "Download & Install",
     "downloading": "Downloading update...",
     "install_hint": "App will restart after installation",
+    "changelog": "Changelog",
     "skip": "Skip",
     "cancel": "Cancel"
   }

@@ -35,6 +35,14 @@ export default defineConfig(async () => ({
           ) {
             return "react";
           }
+          // react-markdown 及其 unified/remark/rehype/micromark 生态单独成 chunk，
+          // 避免被 vendor 兜底吞掉、随首屏一起加载。
+          // 只归集 markdown 专用的大库；通用小工具库仍留在 vendor，避免循环 chunk。
+          const markdownPrefixes = [
+            "react-markdown", "unified", "remark-", "rehype-", "mdast-", "hast-",
+            "unist-", "micromark", "vfile", "devlop",
+          ];
+          if (markdownPrefixes.some((p) => id.includes(`node_modules/${p}`))) return "markdown";
           return "vendor";
         },
       },

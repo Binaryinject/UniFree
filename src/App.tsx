@@ -19,6 +19,8 @@ const LicenseTab = lazy(() => import("./components/LicenseTab"));
 const HubTab = lazy(() => import("./components/HubTab"));
 const EditorTab = lazy(() => import("./components/EditorTab"));
 const AboutTab = lazy(() => import("./components/AboutTab"));
+// 仅在显示更新日志时按需加载 markdown 渲染器
+const ReactMarkdown = lazy(() => import("react-markdown"));
 
 export interface LogEntry {
   time: string;
@@ -124,7 +126,7 @@ export default function App() {
   const clearLogs = useCallback(() => setLogs([]), []);
 
   // Auto-update state
-  const [updateInfo, setUpdateInfo] = useState<{ version: string; downloadUrl: string; fileName: string } | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<{ version: string; downloadUrl: string; fileName: string; body: string } | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
 
@@ -143,12 +145,13 @@ export default function App() {
 
   const checkForUpdate = useCallback(async () => {
     try {
-      const info = await invoke<{ version: string; download_url: string; file_name: string } | null>("check_update");
+      const info = await invoke<{ version: string; download_url: string; file_name: string; body: string } | null>("check_update");
       if (info) {
         setUpdateInfo({
           version: info.version,
           downloadUrl: info.download_url,
           fileName: info.file_name,
+          body: info.body,
         });
       }
     } catch (e) {
@@ -276,9 +279,43 @@ export default function App() {
               </Typography>
             </Box>
           ) : (
-            <Typography variant="body2" color="text.secondary">
-              {t("update.install_hint")}
-            </Typography>
+            <Box>
+              <Typography variant="body2" color="text.secondary">
+                {t("update.install_hint")}
+              </Typography>
+              {updateInfo?.body && (
+                <Box
+                  sx={{
+                    mt: 1.5,
+                    maxHeight: 260,
+                    overflowY: "auto",
+                    borderTop: 1,
+                    borderColor: "divider",
+                    pt: 1,
+                  }}
+                >
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                    {t("update.changelog")}
+                  </Typography>
+                  <Suspense fallback={<Typography variant="body2" color="text.secondary">{updateInfo.body}</Typography>}>
+                    <Box
+                      sx={{
+                        fontSize: 13,
+                        color: "text.secondary",
+                        "& h1, & h2, & h3": { fontSize: 14, fontWeight: 600, margin: "8px 0 4px", color: "text.primary" },
+                        "& p": { margin: "4px 0" },
+                        "& ul, & ol": { margin: "4px 0", paddingLeft: 20 },
+                        "& li": { margin: "2px 0" },
+                        "& a": { color: "primary.main" },
+                        "& code": { fontFamily: "monospace", fontSize: 12 },
+                      }}
+                    >
+                      <ReactMarkdown>{updateInfo.body}</ReactMarkdown>
+                    </Box>
+                  </Suspense>
+                </Box>
+              )}
+            </Box>
           )}
         </DialogContent>
         <DialogActions>

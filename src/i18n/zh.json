@@ -105,6 +105,7 @@
     "download": "下载并安装",
     "downloading": "正在下载更新...",
     "install_hint": "安装完成后应用将自动重启",
+    "changelog": "更新日志",
     "skip": "跳过",
     "cancel": "取消"
   }
