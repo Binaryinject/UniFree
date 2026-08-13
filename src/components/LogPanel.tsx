@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Box, Button, Chip, Typography, Paper } from "@mui/material";
 import { Trash } from "@phosphor-icons/react";
@@ -19,16 +19,22 @@ const levelColor: Record<string, "info" | "success" | "error" | "warning"> = {
 export default function LogPanel({ logs, clearLogs }: Props) {
   const { t } = useTranslation();
   const bodyRef = useRef<HTMLDivElement>(null);
+  // 记录用户当前是否停留在底部（由滚动事件维护）
+  const atBottomRef = useRef(true);
+
+  const handleScroll = useCallback(() => {
+    const el = bodyRef.current;
+    if (el) {
+      atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 4;
+    }
+  }, []);
 
   // 仅在用户停留在底部时，新增日志才自动滚动到底部；
   // 若用户向上翻阅历史日志，则不打断其查看位置
   useEffect(() => {
     const el = bodyRef.current;
-    if (el) {
-      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 4;
-      if (atBottom) {
-        el.scrollTop = el.scrollHeight;
-      }
+    if (el && atBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
     }
   }, [logs]);
 
@@ -40,7 +46,7 @@ export default function LogPanel({ logs, clearLogs }: Props) {
           {t("log.clear")}
         </Button>
       </Box>
-      <Box className="log-body" ref={bodyRef}>
+      <div className="log-body" ref={bodyRef} onScroll={handleScroll}>
         {logs.length === 0 ? (
           <Typography variant="caption" color="text.disabled">{t("log.empty")}</Typography>
         ) : (
@@ -54,7 +60,7 @@ export default function LogPanel({ logs, clearLogs }: Props) {
             </Box>
           ))
         )}
-      </Box>
+      </div>
     </Paper>
   );
 }
