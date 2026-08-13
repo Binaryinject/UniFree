@@ -1,4 +1,4 @@
-# UniFree 2.6.1
+# UniFree 2.7.0
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -121,9 +121,19 @@ MIT License - See [LICENSE](LICENSE) for details
 
 ---
 
-**UniFree 2.6.1** - Unity License Freedom Tool
+**UniFree 2.7.0** - Unity License Freedom Tool
 
 ## Changelog
+
+### v2.7.0
+- Added language toggle (Chinese/English) with persistence across restarts.
+- Auto-scroll log panel to the latest entry (only when already at the bottom).
+- Lazy-load tabs and split vendor chunks to reduce bundle size.
+- Replaced PowerShell/wmic/tasklist with Win32 APIs for faster scanning and better compatibility (fixes `wmic` removal in Windows 11 24H2+).
+- Editor DLL status now detected by content comparison instead of a file-size heuristic.
+- Hub config status now reflects the actual `hubConfig.json` state.
+- Added a Content Security Policy.
+- Repository cleanup: removed build artifacts from git history.
 
 ### v2.6.1
 - Detect Unity Editor versions from `Unity.exe` file metadata instead of installation folder names.

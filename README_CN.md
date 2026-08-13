@@ -1,4 +1,4 @@
-# UniFree 2.6.1
+# UniFree 2.7.0
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -121,9 +121,19 @@ MIT 许可证 - 详见 [LICENSE](LICENSE)
 
 ---
 
-**UniFree 2.6.1** - Unity 许可证自由工具
+**UniFree 2.7.0** - Unity 许可证自由工具
 
 ## 更新日志
+
+### v2.7.0
+- 新增中英文语言切换，并持久化用户选择（重启后记住）。
+- 日志面板新消息自动滚动（仅在停留在底部时）。
+- Tab 懒加载 + vendor 分包，减小打包体积。
+- 用 Win32 API 替换 PowerShell/wmic/tasklist，扫描更快、兼容性更好（修复 Win11 24H2+ 移除 wmic 的问题）。
+- 编辑器 DLL 状态改为内容比对，不再依赖文件大小启发式。
+- Hub 配置状态现在反映真实的 hubConfig.json 状态。
+- 新增 Content Security Policy。
+- 仓库清理：从 git 历史中移除构建产物。
 
 ### v2.6.1
 - 从 `Unity.exe` 文件信息读取编辑器版本，不再依赖安装目录名称。
