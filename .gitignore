@@ -3,6 +3,14 @@ node_modules
 
 # Rust/Tauri build artifacts
 src-tauri/target
+crates/*/target
+tools/*/target
+
+# .NET build artifacts
+tools/*/bin
+tools/*/obj
+
+# General build artifacts
 *.rs.bk
 *.pdb
 
@@ -19,3 +27,7 @@ Thumbs.db
 # Build outputs
 dist
 build
+
+# AI tooling / session artifacts
+.mimocode/.cron-lock
+.mimocode/plans

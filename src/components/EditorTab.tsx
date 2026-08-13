@@ -20,24 +20,20 @@ interface EditorInfo {
 
 interface Props {
   addLog: (level: LogEntry["level"], message: string) => void;
+  hubStatus: string;
 }
 
-// 缓存扫描结果，避免重复扫描
-let editorScanCache: { editors: EditorInfo[]; hubPatched: boolean } | null = null;
-
-export function clearEditorScanCache() {
-  editorScanCache = null;
-}
-
-export default function EditorTab({ addLog }: Props) {
+export default function EditorTab({ addLog, hubStatus }: Props) {
   const { t } = useTranslation();
-  const [editors, setEditors] = useState<EditorInfo[]>(editorScanCache?.editors ?? []);
-  const [hubPatched, setHubPatched] = useState(editorScanCache?.hubPatched ?? true);
-  const [scanning, setScanning] = useState(!editorScanCache);
+  const [editors, setEditors] = useState<EditorInfo[]>([]);
+  const [scanning, setScanning] = useState(true);
   const [busyPath, setBusyPath] = useState<string | null>(null);
   const [batchLoading, setBatchLoading] = useState(false);
   const [customPaths, setCustomPaths] = useState<string[]>([]);
-  const hasScanned = useRef(editorScanCache !== null);
+  const hasScanned = useRef(false);
+
+  // hub 补丁状态由 App 统一管理，此处直接派生
+  const hubPatched = hubStatus === "patched" || hubStatus === "patched_no_backup" || hubStatus === "partial";
 
   useEffect(() => {
     if (!hasScanned.current) {
@@ -50,14 +46,8 @@ export default function EditorTab({ addLog }: Props) {
     hasScanned.current = true;
     setScanning(true);
     try {
-      const [list, hub] = await Promise.all([
-        invoke<EditorInfo[]>("scan_unity_editors"),
-        invoke<string>("check_hub_dll_status"),
-      ]);
+      const list = await invoke<EditorInfo[]>("scan_unity_editors");
       setEditors(list);
-      const patched = hub === "patched" || hub === "patched_no_backup" || hub === "partial";
-      setHubPatched(patched);
-      editorScanCache = { editors: list, hubPatched: patched };
     } catch (e) {
       addLog("error", `${t("log.scan_failed")}: ${e}`);
     }
@@ -76,7 +66,6 @@ export default function EditorTab({ addLog }: Props) {
       const path = await invoke<string>("add_editor_scan_path");
       setCustomPaths((prev) => [...prev, path]);
       addLog("success", `Added scan directory: ${path}`);
-      editorScanCache = null;
       await scanEditors();
     } catch (e) {
       addLog("error", `${e}`);
@@ -88,7 +77,6 @@ export default function EditorTab({ addLog }: Props) {
       await invoke("remove_editor_scan_path", { path });
       setCustomPaths((prev) => prev.filter((p) => p !== path));
       addLog("info", `Removed scan directory: ${path}`);
-      editorScanCache = null;
       await scanEditors();
     } catch (e) {
       addLog("error", `${e}`);
@@ -207,7 +195,7 @@ export default function EditorTab({ addLog }: Props) {
               <IconButton
                 size="small"
                 disabled={scanning}
-                onClick={async () => { editorScanCache = null; await scanEditors(); }}
+                onClick={() => scanEditors()}
               >
                 <ArrowClockwise size={16} className={scanning ? "spin" : ""} />
               </IconButton>

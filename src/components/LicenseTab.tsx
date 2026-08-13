@@ -13,7 +13,7 @@ interface Props {
   addLog: (level: LogEntry["level"], message: string) => void;
   licenseStatus: string;
   isAdmin: boolean;
-  onRefresh: () => Promise<void>;
+  onRefresh: () => Promise<string | null>;
 }
 
 export default function LicenseTab({ addLog, licenseStatus, isAdmin, onRefresh }: Props) {
@@ -50,13 +50,14 @@ export default function LicenseTab({ addLog, licenseStatus, isAdmin, onRefresh }
       addLog("success", result);
 
       await new Promise((r) => setTimeout(r, 500));
-      await onRefresh();
+      // 用 onRefresh 返回的最新状态判断，避免读取闭包里的旧 licenseStatus
+      const status = await onRefresh();
 
-      if (licenseStatus === "authorized") {
+      if (status === "authorized") {
         setLicenseProgress(100);
         addLog("success", t("hub.license_generated_success"));
       } else {
-        addLog("warn", `${t("hub.license_status")}: ${licenseStatus}`);
+        addLog("warn", `${t("hub.license_status")}: ${status ?? licenseStatus}`);
       }
 
     } catch (e) {

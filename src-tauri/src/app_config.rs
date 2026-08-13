@@ -1,13 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::RwLock;
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 pub struct AppConfig {
     pub hub_install_path: Option<String>,
     #[serde(default)]
     pub editor_scan_paths: Vec<String>,
 }
+
+/// 进程内配置缓存，避免每次命令都重新读盘+解析 JSON
+static CONFIG_CACHE: RwLock<Option<AppConfig>> = RwLock::new(None);
 
 fn config_path() -> PathBuf {
     let data_dir = dirs::config_dir()
@@ -15,7 +19,7 @@ fn config_path() -> PathBuf {
     data_dir.join("UniFree").join("config.json")
 }
 
-pub fn load() -> AppConfig {
+fn load_from_disk() -> AppConfig {
     let path = config_path();
     if path.exists() {
         if let Ok(content) = fs::read_to_string(&path) {
@@ -27,6 +31,19 @@ pub fn load() -> AppConfig {
     AppConfig::default()
 }
 
+pub fn load() -> AppConfig {
+    if let Ok(guard) = CONFIG_CACHE.read() {
+        if let Some(cfg) = &*guard {
+            return cfg.clone();
+        }
+    }
+    let cfg = load_from_disk();
+    if let Ok(mut guard) = CONFIG_CACHE.write() {
+        *guard = Some(cfg.clone());
+    }
+    cfg
+}
+
 pub fn save(config: &AppConfig) -> Result<(), String> {
     let path = config_path();
     if let Some(parent) = path.parent() {
@@ -34,6 +51,10 @@ pub fn save(config: &AppConfig) -> Result<(), String> {
     }
     let json = serde_json::to_string_pretty(config).map_err(|e| format!("Failed to serialize config: {}", e))?;
     fs::write(&path, json).map_err(|e| format!("Failed to write config: {}", e))?;
+    // 同步更新缓存
+    if let Ok(mut guard) = CONFIG_CACHE.write() {
+        *guard = Some(config.clone());
+    }
     Ok(())
 }
 

@@ -10,6 +10,9 @@ fn hub_asar_path() -> PathBuf {
     hub_resources_path().join("app.asar")
 }
 
+/// ValidateSignature 包装函数的字节锚点（用于检测 Native AOT exe 是否已补丁）
+const VALIDATE_SIG_PATTERN: &str = "57 56 53 48 83 EC 20 48 8B DA 48 85 DB 74 ?? 48 8B 71 10 40 0F B6 79 18 48 8D 15 ?? ?? ?? ?? 48 39 11 74 ?? 48 8D 15 ?? ?? ?? ?? 48 39 11 75 ?? 48 8B D3";
+
 /// Check EntitlementResolver DLL status
 pub fn get_editor_dll_status(dll_path: &str) -> String {
     let path = Path::new(dll_path);
@@ -23,16 +26,27 @@ pub fn get_editor_dll_status(dll_path: &str) -> String {
         return "patched".into();
     }
 
-    // 检查DLL大小来判断是否已补丁
-    // 原始DLL约514KB，补丁后约341KB
-    if let Ok(metadata) = fs::metadata(path) {
-        let size = metadata.len();
-        if size < 400_000 {
-            return "patched_no_backup".into();
+    // 无备份时通过内容比对判断是否已补丁（不依赖文件大小，避免跨版本误判）
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    let Ok(data) = fs::read(path) else {
+        return "unknown".into();
+    };
+    let patched = match file_name {
+        "System.Security.Cryptography.Xml.dll" => {
+            data.as_slice() == include_bytes!("../resources/win/System.Security.Cryptography.Xml.dll").as_slice()
         }
-    }
-
-    "original".into()
+        "Unity.Licensing.EntitlementResolver.dll" => {
+            data.as_slice() == include_bytes!("../resources/win/Unity.Licensing.EntitlementResolver.dll").as_slice()
+        }
+        "Unity.Licensing.Client.exe" => {
+            // Native AOT：定位 ValidateSignature 包装函数，检查函数头是否为 mov eax,1; ret
+            find_pattern(&data, VALIDATE_SIG_PATTERN)
+                .map(|off| data.get(off as usize..off as usize + 6) == Some(&[0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3][..]))
+                .unwrap_or(false)
+        }
+        _ => false,
+    };
+    if patched { "patched_no_backup".into() } else { "original".into() }
 }
 
 /// 通配符字节搜索，返回文件偏移
@@ -93,9 +107,8 @@ pub fn patch_licensing_client(exe_path: &str) -> Result<String, String> {
     // 锚点包含函数头 + 配置字段读取 ([rcx+10h] cert、[rcx+18h] checkEnabled) + 双重类型检查，
     // 对绝对地址（lea rel32）使用 ?? 通配，同发布线内跨小版本兼容。
     // 注：cmp [rcx],rdx 编码为 48 39 11（ModRM 0x11，rm=rcx），不要误写成 17（那是 [rdi]）。
-    let p1 = find_pattern(&data,
-        "57 56 53 48 83 EC 20 48 8B DA 48 85 DB 74 ?? 48 8B 71 10 40 0F B6 79 18 48 8D 15 ?? ?? ?? ?? 48 39 11 74 ?? 48 8D 15 ?? ?? ?? ?? 48 39 11 75 ?? 48 8B D3"
-    ).ok_or("P1: ValidateSignature wrapper not found")?;
+    let p1 = find_pattern(&data, VALIDATE_SIG_PATTERN)
+        .ok_or("P1: ValidateSignature wrapper not found")?;
     patches.push((p1, vec![0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3]));
 
     // 注：早期补丁已由本单点补丁取代（见 git 历史 / docs）：
@@ -192,10 +205,6 @@ fn hub_patch_state() -> String {
 
 /// Check Hub status: "patched", "original", "error"
 pub fn get_hub_status() -> String {
-    hub_patch_state()
-}
-
-pub fn get_hub_config_status() -> String {
     hub_patch_state()
 }
 
@@ -604,17 +613,36 @@ pub fn restore_hub() -> Result<String, String> {
 pub fn check_process_running(name: &str) -> bool {
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
-        let output = std::process::Command::new("tasklist")
-            .args(["/FI", &format!("IMAGENAME eq {}", name), "/NH"])
-            .creation_flags(0x08000000)
-            .output();
-        match output {
-            Ok(o) => {
-                let stdout = String::from_utf8_lossy(&o.stdout);
-                stdout.contains(name)
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+        };
+
+        unsafe {
+            let snapshot = match CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) {
+                Ok(h) => h,
+                Err(_) => return false,
+            };
+            let mut entry = PROCESSENTRY32W {
+                dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+                ..Default::default()
+            };
+            let mut found = false;
+            if Process32FirstW(snapshot, &mut entry).is_ok() {
+                loop {
+                    let end = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+                    let exe_name = String::from_utf16_lossy(&entry.szExeFile[..end]);
+                    if exe_name.eq_ignore_ascii_case(name) {
+                        found = true;
+                        break;
+                    }
+                    if Process32NextW(snapshot, &mut entry).is_err() {
+                        break;
+                    }
+                }
             }
-            Err(_) => false,
+            let _ = CloseHandle(snapshot);
+            found
         }
     }
     #[cfg(not(target_os = "windows"))]

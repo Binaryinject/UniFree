@@ -86,10 +86,6 @@ fn target_file_name_for_version(version_folder: &str) -> &'static str {
     }
 }
 
-fn dll_name_for_version(version_folder: &str) -> &'static str {
-    target_file_name_for_version(version_folder)
-}
-
 fn dll_path_for_folder(folder: &PathBuf) -> PathBuf {
     let version = folder.file_name().unwrap_or_default().to_string_lossy();
     let target_name = target_file_name_for_version(&version);
@@ -131,15 +127,51 @@ fn read_product_name(folder: &PathBuf) -> String {
 
 #[cfg(target_os = "windows")]
 fn read_unity_exe_version(exe: &PathBuf) -> Option<String> {
-    use std::process::Command;
-    let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-Command", "(Get-Item -LiteralPath $env:UNIFREE_EXE).VersionInfo.ProductVersion"])
-        .env("UNIFREE_EXE", exe)
-        .output()
-        .ok()?;
-    if !output.status.success() { return None; }
-    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!version.is_empty()).then_some(version)
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{
+        GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+    };
+
+    let wide: Vec<u16> = exe.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+
+    unsafe {
+        let size = GetFileVersionInfoSizeW(PCWSTR(wide.as_ptr()), None);
+        if size == 0 {
+            return None;
+        }
+        let mut buf = vec![0u8; size as usize];
+        if GetFileVersionInfoW(PCWSTR(wide.as_ptr()), 0, size, buf.as_mut_ptr() as *mut _).is_err() {
+            return None;
+        }
+
+        // 读 Translation 以定位 StringFileInfo 的语言/代码页
+        let make_key = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+        let trans_key = make_key("\\VarFileInfo\\Translation");
+        let mut trans_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
+        let mut trans_len = 0u32;
+        if !VerQueryValueW(buf.as_ptr() as *const _, PCWSTR(trans_key.as_ptr()), &mut trans_ptr, &mut trans_len).as_bool() {
+            return None;
+        }
+        if trans_ptr.is_null() || trans_len < 4 {
+            return None;
+        }
+        let lang = *(trans_ptr as *const u16);
+        let codepage = *((trans_ptr as *const u16).add(1));
+        let product_key = make_key(&format!("\\StringFileInfo\\{lang:04x}{codepage:04x}\\ProductVersion"));
+
+        let mut val_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
+        let mut val_len = 0u32;
+        if !VerQueryValueW(buf.as_ptr() as *const _, PCWSTR(product_key.as_ptr()), &mut val_ptr, &mut val_len).as_bool() {
+            return None;
+        }
+        if val_ptr.is_null() || val_len == 0 {
+            return None;
+        }
+        let chars = std::slice::from_raw_parts(val_ptr as *const u16, (val_len as usize).saturating_sub(1));
+        let version = String::from_utf16_lossy(chars);
+        (!version.is_empty()).then_some(version)
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -224,7 +256,7 @@ fn read_located_editors() -> Vec<EditorInfo> {
                 if let Some(list) = parsed.data {
                     for e in list {
                         if let Some(info) = parse_located_editor(&e) {
-                            if !editors.iter().any(|existing: &EditorInfo| existing.version == info.version && existing.architecture == info.architecture) {
+                            if !editors.iter().any(|existing: &EditorInfo| existing.dll_path == info.dll_path) {
                                 editors.push(info);
                             }
                         }
@@ -240,7 +272,7 @@ fn read_located_editors() -> Vec<EditorInfo> {
                         let location = val.get("location").cloned();
                         let arch = val.get("architecture").and_then(|v| v.as_str()).unwrap_or("x86_64").to_string();
                         if let Some(info) = build_editor_info(&version, location, &arch) {
-                            if !editors.iter().any(|e: &EditorInfo| e.version == info.version && e.architecture == info.architecture) {
+                            if !editors.iter().any(|e: &EditorInfo| e.dll_path == info.dll_path) {
                                 editors.push(info);
                             }
                         }
@@ -305,7 +337,7 @@ fn derive_dll_from_exe(exe: &PathBuf) -> PathBuf {
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let dll_name = dll_name_for_version(&version);
+        let dll_name = target_file_name_for_version(&version);
         #[cfg(target_os = "windows")]
         {
             let client = editor_dir.join("Data").join("Resources").join("Licensing").join("Client");
@@ -375,7 +407,8 @@ fn dedup_extend(
     seen: &mut std::collections::HashSet<String>,
 ) {
     for e in editors {
-        let key = format!("{}-{}", e.version, e.architecture);
+        // 以 dll 绝对路径作为唯一键：同版本不同安装位置的编辑器应被分别保留
+        let key = e.dll_path.clone();
         if seen.insert(key) {
             all.push(e);
         }

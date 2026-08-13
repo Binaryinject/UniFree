@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -7,47 +7,35 @@ import {
 import { ShieldCheck, ArrowCounterClockwise, Warning, FolderOpen } from "@phosphor-icons/react";
 import type { LogEntry } from "../App";
 import StatusChip from "./StatusChip";
-import { clearEditorScanCache } from "./EditorTab";
 import { logLicenseResult, relaunchAsAdmin } from "../utils/actions";
 
 interface Props {
   addLog: (level: LogEntry["level"], message: string) => void;
   licenseStatus: string;
   isAdmin: boolean;
-  onRefresh: () => Promise<void>;
+  hubStatus: string;
+  onRefresh: () => Promise<string | null>;
+  onHubStatusChange: () => Promise<string | null>;
 }
 
-// 缓存扫描结果，避免重复扫描
-let hubScanCache: { status: string; config: string } | null = null;
-
-export default function HubTab({ addLog, licenseStatus, isAdmin, onRefresh }: Props) {
+export default function HubTab({ addLog, licenseStatus, isAdmin, hubStatus, onRefresh, onHubStatusChange }: Props) {
   const { t } = useTranslation();
-  const [hubStatus, setHubStatus] = useState<string>(hubScanCache?.status ?? "unknown");
-  const [hubConfigStatus, setHubConfigStatus] = useState<string>(hubScanCache?.config ?? "unknown");
+  const [hubConfigStatus, setHubConfigStatus] = useState<string>("unknown");
   const [disableSignin, setDisableSignin] = useState(true);
   const [disableUpdate, setDisableUpdate] = useState(true);
   const [hubPath, setHubPath] = useState<string>("");
   const [patching, setPatching] = useState(false);
   const [restoring, setRestoring] = useState(false);
-  const hasScanned = useRef(hubScanCache !== null);
 
   useEffect(() => {
-    if (!hasScanned.current) {
-      scanHub();
-    }
+    scanHubConfig();
     loadHubPath();
   }, []);
 
-  async function scanHub() {
-    hasScanned.current = true;
+  async function scanHubConfig() {
     try {
-      const [status, config] = await Promise.all([
-        invoke<string>("check_hub_dll_status"),
-        invoke<string>("check_hub_config_status"),
-      ]);
-      setHubStatus(status);
+      const config = await invoke<string>("check_hub_config_status");
       setHubConfigStatus(config);
-      hubScanCache = { status, config };
     } catch (e) {
       addLog("error", `${t("log.scan_failed")}: ${e}`);
     }
@@ -65,8 +53,8 @@ export default function HubTab({ addLog, licenseStatus, isAdmin, onRefresh }: Pr
       const path = await invoke<string>("select_hub_path");
       setHubPath(path);
       addLog("success", `Unity Hub path set: ${path}`);
-      hubScanCache = null;
-      await scanHub();
+      await scanHubConfig();
+      await onHubStatusChange();
       return true;
     } catch (e) {
       // User cancelled or error occurred
@@ -82,8 +70,8 @@ export default function HubTab({ addLog, licenseStatus, isAdmin, onRefresh }: Pr
       await invoke("reset_hub_path");
       setHubPath("");
       addLog("info", "Hub path reset to default");
-      hubScanCache = null;
-      await scanHub();
+      await scanHubConfig();
+      await onHubStatusChange();
     } catch (e) {
       addLog("error", `${e}`);
     }
@@ -114,8 +102,6 @@ export default function HubTab({ addLog, licenseStatus, isAdmin, onRefresh }: Pr
     } catch (e) {
       addLog("error", `${t("log.hub_launch_failed")}: ${e}`);
     }
-    // 清除EditorTab缓存，使其重新检测Hub状态
-    clearEditorScanCache();
   }
 
   async function handlePatch() {
@@ -144,7 +130,8 @@ export default function HubTab({ addLog, licenseStatus, isAdmin, onRefresh }: Pr
       }
     }
     setPatching(false);
-    await scanHub();
+    await scanHubConfig();
+    await onHubStatusChange();
     await onRefresh();
   }
 
@@ -187,7 +174,8 @@ export default function HubTab({ addLog, licenseStatus, isAdmin, onRefresh }: Pr
       }
     }
     setRestoring(false);
-    await scanHub();
+    await scanHubConfig();
+    await onHubStatusChange();
     await onRefresh();
   }
 

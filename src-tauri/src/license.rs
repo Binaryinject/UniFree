@@ -16,10 +16,15 @@ pub fn ulf_path() -> PathBuf {
 
 pub fn copy_ulf() -> Result<String, String> {
     let path = ulf_path();
-    if path.exists() {
-        return Ok(format!("license_exists:{}", path.display()));
+    if !path.exists() {
+        return Err("License file not found. Use generate_license_direct command.".to_string());
     }
-    Err("License file not found. Use generate_license_direct command.".to_string())
+    // 返回带前缀的状态，供前端区分「保留已签名 / 跳过缺签名 / 已就绪」三种情况
+    match get_ulf_status().as_str() {
+        "authorized" => Ok(format!("preserved_signed:{}", path.display())),
+        "missing_signature" => Ok(format!("skipped_missing_signature:{}", path.display())),
+        _ => Ok(format!("license_exists:{}", path.display())),
+    }
 }
 
 pub fn get_ulf_status() -> String {

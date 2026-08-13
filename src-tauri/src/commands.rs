@@ -4,6 +4,7 @@ use tauri::AppHandle;
 
 use crate::alf_generator;
 use crate::app_config;
+use crate::config_patcher;
 use crate::license;
 use crate::patcher;
 use crate::scanner;
@@ -35,7 +36,7 @@ pub fn check_hub_dll_status() -> String {
 
 #[command]
 pub fn check_hub_config_status() -> String {
-    patcher::get_hub_config_status()
+    config_patcher::get_hub_config_status()
 }
 
 #[command]

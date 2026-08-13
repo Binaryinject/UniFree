@@ -111,12 +111,14 @@ export default function App() {
 
   // 共用状态 - 立即初始化，不等待后端
   const [licenseStatus, setLicenseStatus] = useState<string>("not_found");
+  const [hubStatus, setHubStatus] = useState<string>("unknown");
   const [isAdmin, setIsAdmin] = useState(true); // 默认假设是管理员
 
   // 异步检查状态，不阻塞UI
   useEffect(() => {
     checkLicenseStatus();
     checkAdminStatus();
+    checkHubStatus();
     checkForUpdate();
   }, []);
 
@@ -172,8 +174,21 @@ export default function App() {
     try {
       const status = await invoke<string>("check_license_status");
       setLicenseStatus(status);
+      return status;
     } catch (e) {
       console.error("License check failed:", e);
+      return null;
+    }
+  }, []);
+
+  const checkHubStatus = useCallback(async () => {
+    try {
+      const status = await invoke<string>("check_hub_dll_status");
+      setHubStatus(status);
+      return status;
+    } catch (e) {
+      console.error("Hub check failed:", e);
+      return null;
     }
   }, []);
 
@@ -205,8 +220,8 @@ export default function App() {
         </Box>
         <Box className="tab-body">
           {tab === 0 && <LicenseTab addLog={addLog} licenseStatus={licenseStatus} isAdmin={isAdmin} onRefresh={checkLicenseStatus} />}
-          {tab === 1 && <HubTab addLog={addLog} licenseStatus={licenseStatus} isAdmin={isAdmin} onRefresh={checkLicenseStatus} />}
-          {tab === 2 && <EditorTab addLog={addLog} />}
+          {tab === 1 && <HubTab addLog={addLog} licenseStatus={licenseStatus} isAdmin={isAdmin} hubStatus={hubStatus} onRefresh={checkLicenseStatus} onHubStatusChange={checkHubStatus} />}
+          {tab === 2 && <EditorTab addLog={addLog} hubStatus={hubStatus} />}
           {tab === 3 && <AboutTab />}
         </Box>
         <LogPanel logs={logs} clearLogs={clearLogs} />

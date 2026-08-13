@@ -8,9 +8,6 @@
 use sha1::{Digest, Sha1};
 use base64::{Engine as _, engine::general_purpose};
 
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
-
 /// ALF 生成器
 pub struct AlfGenerator {
     unity_version: String,
@@ -246,8 +243,6 @@ fn base64_encode(s: &str) -> String {
 /// Windows 特定实现
 #[cfg(target_os = "windows")]
 pub mod windows {
-    use super::*;
-
     /// 获取 Windows Product ID
     pub fn get_windows_product_id() -> Option<String> {
         use winreg::enums::*;
@@ -262,61 +257,76 @@ pub mod windows {
         None
     }
 
-    /// 获取 C: 盘所在的物理磁盘序列号
+    /// 获取 C: 盘所在卷的序列号（用 Win32 API 替代 PowerShell，避免外部进程）
     pub fn get_boot_drive_serial_number() -> Option<String> {
-        let ps_command = r#"
-            $disk = Get-Partition -DriveLetter C | Get-Disk
-            $disk.SerialNumber
-        "#;
+        use ::windows::core::PCWSTR;
+        use ::windows::Win32::Storage::FileSystem::GetVolumeInformationW;
 
-        if let Ok(output) = std::process::Command::new("powershell")
-            .args(&["-NoProfile", "-NonInteractive", "-Command", ps_command])
-            .creation_flags(0x08000000)
-            .output()
-        {
-            let serial = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !serial.is_empty() {
-                return Some(serial);
+        let root: Vec<u16> = "C:\\".encode_utf16().chain(std::iter::once(0)).collect();
+        let mut serial = 0u32;
+        unsafe {
+            let ok = GetVolumeInformationW(
+                PCWSTR(root.as_ptr()),
+                None,
+                Some(&mut serial),
+                None,
+                None,
+                None,
+            );
+            if ok.is_ok() && serial != 0 {
+                return Some(format!("{serial:08X}"));
             }
         }
         None
     }
 
-    /// 获取 BIOS 序列号
+    /// 获取 BIOS 标识（用注册表替代已废弃的 wmic）
     pub fn get_bios_identifier() -> Option<String> {
-        if let Ok(output) = std::process::Command::new("wmic")
-            .args(&["bios", "get", "SerialNumber"])
-            .creation_flags(0x08000000)
-            .output()
-        {
-            let serial = String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .nth(1)
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            if !serial.is_empty() {
-                return Some(serial);
+        use winreg::enums::*;
+        use winreg::RegKey;
+
+        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+        if let Ok(key) = hklm.open_subkey("HARDWARE\\DESCRIPTION\\System\\BIOS") {
+            for value in ["BIOSVersion", "SystemProductName"] {
+                if let Ok(v) = key.get_value::<String, _>(value) {
+                    if !v.is_empty() {
+                        return Some(v);
+                    }
+                }
             }
         }
         None
     }
 
-    /// 获取 MAC 地址
+    /// 获取 MAC 地址（用 GetAdaptersInfo 替代 getmac 外部命令）
     pub fn get_mac_address() -> Option<String> {
-        if let Ok(output) = std::process::Command::new("getmac")
-            .args(&["/fo", "csv", "/nh"])
-            .creation_flags(0x08000000)
-            .output()
-        {
-            let mac = String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .next()
-                .and_then(|line| line.split(',').next())
-                .map(|s| s.trim_matches('"').replace('-', ":").to_lowercase())
-                .unwrap_or_default();
-            if !mac.is_empty() {
-                return Some(mac);
+        use ::windows::Win32::NetworkManagement::IpHelper::{GetAdaptersInfo, IP_ADAPTER_INFO};
+
+        unsafe {
+            let mut size: u32 = 0;
+            GetAdaptersInfo(None, &mut size);
+            if size == 0 {
+                return None;
+            }
+            let mut buf = vec![0u8; size as usize];
+            let info = buf.as_mut_ptr() as *mut IP_ADAPTER_INFO;
+            if GetAdaptersInfo(Some(info), &mut size) != 0 {
+                return None;
+            }
+            let mut cur = info;
+            while !cur.is_null() {
+                let adapter = &*cur;
+                if adapter.AddressLength > 0 {
+                    let mac = adapter.Address[..adapter.AddressLength as usize]
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect::<Vec<_>>()
+                        .join(":");
+                    if !mac.is_empty() {
+                        return Some(mac);
+                    }
+                }
+                cur = adapter.Next;
             }
         }
         None
