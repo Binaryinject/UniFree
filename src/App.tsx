@@ -12,6 +12,7 @@ import {
   ArrowDown,
 } from "@phosphor-icons/react";
 import LogPanel from "./components/LogPanel";
+import i18n, { LANG_STORAGE_KEY } from "./i18n";
 
 // 按 Tab 懒加载，减小首屏 bundle，切换 Tab 时才加载对应模块
 const LicenseTab = lazy(() => import("./components/LicenseTab"));
@@ -79,6 +80,7 @@ export default function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [systemDark, setSystemDark] = useState(getSystemTheme() === "dark");
+  const [lang, setLang] = useState<string>(() => (i18n.language.startsWith("zh") ? "zh" : "en"));
 
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -96,6 +98,13 @@ export default function App() {
       return order[(order.indexOf(prev) + 1) % 3];
     });
   }, []);
+
+  const toggleLanguage = useCallback(() => {
+    const next = lang === "zh" ? "en" : "zh";
+    i18n.changeLanguage(next);
+    localStorage.setItem(LANG_STORAGE_KEY, next);
+    setLang(next);
+  }, [lang]);
 
   const themeIcon = themeMode === "system"
     ? <Monitor size={16} />
@@ -222,11 +231,22 @@ export default function App() {
             <Tab icon={<Wrench size={16} />} label={t("tabs.editor")} iconPosition="start" />
             <Tab icon={<Info size={16} />} label={t("tabs.about")} iconPosition="start" />
           </Tabs>
-          <Tooltip title={themeLabel}>
-            <IconButton onClick={cycleTheme} size="small" sx={{ mr: 1 }}>
-              {themeIcon}
-            </IconButton>
-          </Tooltip>
+          <Box sx={{ display: "flex", alignItems: "center" }}>
+            <Tooltip title={lang === "zh" ? "Switch to English" : "切换为中文"}>
+              <IconButton
+                onClick={toggleLanguage}
+                size="small"
+                sx={{ mr: 0.5, fontSize: 12, fontWeight: 600, width: 30 }}
+              >
+                {lang === "zh" ? "中" : "EN"}
+              </IconButton>
+            </Tooltip>
+            <Tooltip title={themeLabel}>
+              <IconButton onClick={cycleTheme} size="small" sx={{ mr: 1 }}>
+                {themeIcon}
+              </IconButton>
+            </Tooltip>
+          </Box>
         </Box>
         <Box className="tab-body">
           <Suspense fallback={<TabLoadingFallback />}>
