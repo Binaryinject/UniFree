@@ -20,11 +20,15 @@ export default function LogPanel({ logs, clearLogs }: Props) {
   const { t } = useTranslation();
   const bodyRef = useRef<HTMLDivElement>(null);
 
-  // 新增日志时自动滚动到底部，定位到最新一行
+  // 仅在用户停留在底部时，新增日志才自动滚动到底部；
+  // 若用户向上翻阅历史日志，则不打断其查看位置
   useEffect(() => {
     const el = bodyRef.current;
     if (el) {
-      el.scrollTop = el.scrollHeight;
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 4;
+      if (atBottom) {
+        el.scrollTop = el.scrollHeight;
+      }
     }
   }, [logs]);
 
