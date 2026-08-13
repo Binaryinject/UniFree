@@ -1,21 +1,23 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, lazy, Suspense } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   ThemeProvider, createTheme, CssBaseline, Box, Tabs, Tab,
   IconButton, Tooltip, Dialog, DialogTitle, DialogContent,
-  DialogActions, Button, Typography, LinearProgress,
+  DialogActions, Button, Typography, LinearProgress, CircularProgress,
 } from "@mui/material";
 import {
   ShieldCheck, Wrench, Info, Sun, Moon, Monitor, Certificate,
   ArrowDown,
 } from "@phosphor-icons/react";
-import HubTab from "./components/HubTab";
-import LicenseTab from "./components/LicenseTab";
-import EditorTab from "./components/EditorTab";
-import AboutTab from "./components/AboutTab";
 import LogPanel from "./components/LogPanel";
+
+// 按 Tab 懒加载，减小首屏 bundle，切换 Tab 时才加载对应模块
+const LicenseTab = lazy(() => import("./components/LicenseTab"));
+const HubTab = lazy(() => import("./components/HubTab"));
+const EditorTab = lazy(() => import("./components/EditorTab"));
+const AboutTab = lazy(() => import("./components/AboutTab"));
 
 export interface LogEntry {
   time: string;
@@ -62,6 +64,14 @@ const darkTheme = createTheme({
     divider: "#333333",
   },
 });
+
+function TabLoadingFallback() {
+  return (
+    <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center", py: 6 }}>
+      <CircularProgress size={28} />
+    </Box>
+  );
+}
 
 export default function App() {
   const { t } = useTranslation();
@@ -219,10 +229,12 @@ export default function App() {
           </Tooltip>
         </Box>
         <Box className="tab-body">
-          {tab === 0 && <LicenseTab addLog={addLog} licenseStatus={licenseStatus} isAdmin={isAdmin} onRefresh={checkLicenseStatus} />}
-          {tab === 1 && <HubTab addLog={addLog} licenseStatus={licenseStatus} isAdmin={isAdmin} hubStatus={hubStatus} onRefresh={checkLicenseStatus} onHubStatusChange={checkHubStatus} />}
-          {tab === 2 && <EditorTab addLog={addLog} hubStatus={hubStatus} />}
-          {tab === 3 && <AboutTab />}
+          <Suspense fallback={<TabLoadingFallback />}>
+            {tab === 0 && <LicenseTab addLog={addLog} licenseStatus={licenseStatus} isAdmin={isAdmin} onRefresh={checkLicenseStatus} />}
+            {tab === 1 && <HubTab addLog={addLog} licenseStatus={licenseStatus} isAdmin={isAdmin} hubStatus={hubStatus} onRefresh={checkLicenseStatus} onHubStatusChange={checkHubStatus} />}
+            {tab === 2 && <EditorTab addLog={addLog} hubStatus={hubStatus} />}
+            {tab === 3 && <AboutTab />}
+          </Suspense>
         </Box>
         <LogPanel logs={logs} clearLogs={clearLogs} />
       </Box>
