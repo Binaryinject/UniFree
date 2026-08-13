@@ -5,11 +5,11 @@ import { listen } from "@tauri-apps/api/event";
 import {
   ThemeProvider, createTheme, CssBaseline, Box, Tabs, Tab,
   IconButton, Tooltip, Dialog, DialogTitle, DialogContent,
-  DialogActions, Button, Typography, LinearProgress, CircularProgress,
+  DialogActions, Button, Typography, LinearProgress, CircularProgress, Collapse,
 } from "@mui/material";
 import {
   ShieldCheck, Wrench, Info, Sun, Moon, Monitor, Certificate,
-  ArrowDown,
+  ArrowDown, CaretDown, CaretUp,
 } from "@phosphor-icons/react";
 import LogPanel from "./components/LogPanel";
 import i18n, { LANG_STORAGE_KEY } from "./i18n";
@@ -129,6 +129,7 @@ export default function App() {
   const [updateInfo, setUpdateInfo] = useState<{ version: string; downloadUrl: string; fileName: string; body: string } | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
+  const [changelogOpen, setChangelogOpen] = useState(false);
 
   // 共用状态 - 立即初始化，不等待后端
   const [licenseStatus, setLicenseStatus] = useState<string>("not_found");
@@ -279,42 +280,49 @@ export default function App() {
               </Typography>
             </Box>
           ) : (
-            <Box>
-              <Typography variant="body2" color="text.secondary">
-                {t("update.install_hint")}
-              </Typography>
-              {updateInfo?.body && (
+            <Typography variant="body2" color="text.secondary">
+              {t("update.install_hint")}
+            </Typography>
+          )}
+
+          {updateInfo?.body && (
+            <Box sx={{ mt: 1.5, borderTop: 1, borderColor: "divider", pt: 1 }}>
+              <Box
+                onClick={() => setChangelogOpen((v) => !v)}
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  cursor: "pointer",
+                  userSelect: "none",
+                }}
+              >
+                <Typography variant="subtitle2">{t("update.changelog")}</Typography>
+                <IconButton size="small" sx={{ p: 0.25 }}>
+                  {changelogOpen ? <CaretUp size={16} /> : <CaretDown size={16} />}
+                </IconButton>
+              </Box>
+              <Collapse in={changelogOpen}>
                 <Box
                   sx={{
-                    mt: 1.5,
-                    maxHeight: 260,
+                    mt: 1,
+                    maxHeight: 240,
                     overflowY: "auto",
-                    borderTop: 1,
-                    borderColor: "divider",
-                    pt: 1,
+                    fontSize: 13,
+                    color: "text.secondary",
+                    "& h1, & h2, & h3": { fontSize: 14, fontWeight: 600, margin: "8px 0 4px", color: "text.primary" },
+                    "& p": { margin: "4px 0" },
+                    "& ul, & ol": { margin: "4px 0", paddingLeft: 20 },
+                    "& li": { margin: "2px 0" },
+                    "& a": { color: "primary.main" },
+                    "& code": { fontFamily: "monospace", fontSize: 12 },
                   }}
                 >
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                    {t("update.changelog")}
-                  </Typography>
                   <Suspense fallback={<Typography variant="body2" color="text.secondary">{updateInfo.body}</Typography>}>
-                    <Box
-                      sx={{
-                        fontSize: 13,
-                        color: "text.secondary",
-                        "& h1, & h2, & h3": { fontSize: 14, fontWeight: 600, margin: "8px 0 4px", color: "text.primary" },
-                        "& p": { margin: "4px 0" },
-                        "& ul, & ol": { margin: "4px 0", paddingLeft: 20 },
-                        "& li": { margin: "2px 0" },
-                        "& a": { color: "primary.main" },
-                        "& code": { fontFamily: "monospace", fontSize: 12 },
-                      }}
-                    >
-                      <ReactMarkdown>{updateInfo.body}</ReactMarkdown>
-                    </Box>
+                    <ReactMarkdown>{updateInfo.body}</ReactMarkdown>
                   </Suspense>
                 </Box>
-              )}
+              </Collapse>
             </Box>
           )}
         </DialogContent>
