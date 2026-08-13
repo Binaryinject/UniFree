@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Box, Button, Chip, Typography, Paper } from "@mui/material";
 import { Trash } from "@phosphor-icons/react";
@@ -17,6 +18,15 @@ const levelColor: Record<string, "info" | "success" | "error" | "warning"> = {
 
 export default function LogPanel({ logs, clearLogs }: Props) {
   const { t } = useTranslation();
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  // 新增日志时自动滚动到底部，定位到最新一行
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [logs]);
 
   return (
     <Paper variant="outlined" className="log-panel">
@@ -26,7 +36,7 @@ export default function LogPanel({ logs, clearLogs }: Props) {
           {t("log.clear")}
         </Button>
       </Box>
-      <Box className="log-body">
+      <Box className="log-body" ref={bodyRef}>
         {logs.length === 0 ? (
           <Typography variant="caption" color="text.disabled">{t("log.empty")}</Typography>
         ) : (
