@@ -10,9 +10,63 @@ Unity Editor 使用 `Unity.Licensing.EntitlementResolver.dll`（< 6000.7）或
 
 | Unity 版本 | 目标文件 | 文件类型 | 补丁方法 |
 |-----------|---------|---------|---------|
-| < 6000 | `System.Security.Cryptography.Xml.dll` | .NET IL DLL | 替换预编译 DLL |
+| 2019.x | `System.Security.Cryptography.Xml.dll` + `Unity.exe` | .NET IL DLL + 原生 PE | 替换 DLL + 原生字节级 patch（见下文） |
+| 2020 ~ 2022 | `System.Security.Cryptography.Xml.dll` | .NET IL DLL | 替换预编译 DLL |
 | 6000.0 ~ 6000.6 | `Unity.Licensing.EntitlementResolver.dll` | .NET IL DLL | 替换预编译 DLL |
 | **>= 6000.7** | **`Unity.Licensing.Client.exe`** | **Native AOT PE** | **字节级 patch（见下文）** |
+
+---
+
+## Unity 2019.4 原生补丁（`ValidateServerProcess` + `LICENSE SYSTEM` 分发器）
+
+### 背景：2019.4 的许可证校验有两层原生关卡
+
+Unity 2019.4 编辑器启动时的许可证校验链路（2024 年后会双重失败）：
+
+```
+Unity.exe
+  ├─[关卡 1] LicensingClient::ValidateServerProcess
+  │     对 Licensing Client（Hub 共享的 v1.17.4 或编辑器自带的 v1.6.2）做
+  │     Authenticode 签名校验（WinVerifyTrust + 与内置 Unity 证书比对）。
+  │     其代码签名证书 NotAfter=2024-07-19，过期后校验失败 → 回退 Legacy licensing。
+  │     ★ 补丁 P1：把 `cmp edi,9; je`（结果==9 成功）改为 `cmp edi,edi; je`（恒成立），
+  │       使编辑器无条件接受 Licensing Client。
+  │
+  └─[关卡 2] LicensingLegacy / WinILicensingAdapter（原生 C++）
+        编辑器原生读取 `C:\ProgramData\Unity\Unity_lic.ulf` 并独立校验其 XML 数字签名
+        （原生 RSA 验签，静态链接在 0x143745C70，非 .NET）。失败时错误码 == 2 →
+        错误分发器（switch dispatcher）格式化 "Unity license information is invalid." → 编辑器退出。
+        ★ 补丁 P2：把分发器读取错误码的 `call [rax+0xD8]` 改为 `xor eax,eax`，
+          使错误码恒为 0（成功），不再产生 "license invalid"。
+```
+
+### 实现位置
+
+`src-tauri/src/patcher.rs` → `patch_unity_exe_validate_server_process()`
+
+### 补丁一览
+
+| Patch | 位置 | 锚点模式 | 补丁内容 |
+|-------|------|---------|---------|
+| **P1** | `LicensingClient::ValidateServerProcess` 决策点 `cmp edi,9; je <成功>` | `83 FF 09 0F 84 ?? ?? ?? ?? 49 8B CF 48 8D 15 ?? ?? ?? ?? 80 3C 11 00` | `83 FF 09` → `3B FF 90`（cmp edi,edi; nop，使 je 恒跳成功分支） |
+| **P2** | `Licensing` 错误分发器读取错误码 `call [rax+0xD8]` | `48 8B 01 FF 90 D8 00 00 00 83 F8 50` | `FF 90 D8 00 00 00` → `31 C0 90 90 90 90`（xor eax,eax + 4×nop，错误码恒 0） |
+
+- 两个锚点均在 2019.4.40f1（build `ffc62b691db5`）的 Unity.exe 中唯一命中一次。
+- P1 补丁后差异为两个相距 2 字节的单字节区（中间 `FF` 不变）：`83 FF 09` → `3B FF 90`。
+- P2 补丁后差异为一个 6 字节区：`FF 90 D8 00 00 00` → `31 C0 90 90 90 90`。
+- `patch_entitlement_resolver()` 检测到 2019.x 编辑器时，先对 Unity.exe 应用这两个补丁，
+  再替换 `System.Security.Cryptography.Xml.dll`；`restore()` 会一并恢复 `Unity.exe.bak`。
+
+> ⚠️ P1+P2 已让编辑器**通过** "LICENSE SYSTEM license invalid" 关卡并进入
+> entitlement 解析，但 2019.4 仍有**第三个阻塞点**：编辑器报
+> `License is not active (com.unity.editor.ui). HasEntitlements will fail.` →
+> `No valid Unity Editor license found.`。
+> 根因：替换 `System.Security.Cryptography.Xml.dll` 后，Licensing Client 的
+> `UlfLicense.Parse`（新格式）签名校验恒通过，于是 ULF 被按**新格式**解析（读
+> `<EntitlementGroups>/<Entitlement>`），而 UniFree 生成的 ULF 是**旧格式**
+> （`<Features>`），旧格式的 Feature→entitlement 映射只产出
+> `com.unity.editor.legacy.pro` 等 legacy 授权，不含编辑器原生要求的
+> `com.unity.editor.ui`，因此 HasEntitlements 失败。
 
 ---
 

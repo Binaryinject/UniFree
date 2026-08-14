@@ -1,4 +1,4 @@
-# UniFree 2.7.0
+# UniFree 2.8.0
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -54,7 +54,8 @@ Version-aware patching that bypasses `ValidateSignature`:
 |---------------|------------|--------|
 | **6000.7+** | `Unity.Licensing.Client.exe` | **Byte-level anchor-based patching** (1 patch: `ValidateSignature` wrapper → always valid) |
 | 6000.0-6000.6 | `Unity.Licensing.EntitlementResolver.dll` | Pre-patched DLL replacement |
-| 2019-2022 | `System.Security.Cryptography.Xml.dll` | Pre-patched DLL replacement |
+| 2019.x | `Unity.exe` + `System.Security.Cryptography.Xml.dll` | Native anchor patch (`ValidateServerProcess` → always valid) + pre-patched DLL replacement |
+| 2020-2022 | `System.Security.Cryptography.Xml.dll` | Pre-patched DLL replacement |
 
 For 6000.7+, the binary is .NET 10 Native AOT compiled (no IL). Patches use pattern-matching anchors to locate and modify specific native instructions, providing cross-minor-version compatibility. See `docs/editor-dll-patching.md` for technical details.
 
@@ -76,7 +77,8 @@ For 6000.7+, the binary is .NET 10 Native AOT compiled (no IL). Patches use patt
 | Hub | `hubConfig.json` | Update sign-in and update settings |
 | Editor (6000.7+) | `Unity.Licensing.Client.exe` | Byte-level binary patch (1 anchor-based patch) |
 | Editor (6000.0-6000.6) | `Unity.Licensing.EntitlementResolver.dll` | Replace with pre-patched DLL |
-| Editor (2019-2022) | `System.Security.Cryptography.Xml.dll` | Replace with pre-patched DLL |
+| Editor (2019.x) | `Unity.exe` + `System.Security.Cryptography.Xml.dll` | Native anchor patch + replace with pre-patched DLL |
+| Editor (2020-2022) | `System.Security.Cryptography.Xml.dll` | Replace with pre-patched DLL |
 | License | `C:\ProgramData\Unity\Unity_lic.ulf` | Generate RSA-signed license file |
 
 ## Build from Source
@@ -121,9 +123,16 @@ MIT License - See [LICENSE](LICENSE) for details
 
 ---
 
-**UniFree 2.7.0** - Unity License Freedom Tool
+**UniFree 2.8.0** - Unity License Freedom Tool
 
 ## Changelog
+
+### v2.8.0
+- **Unity 2019.4 native patch**: added two anchor-based byte patches to `Unity.exe` for 2019.x editors:
+  - `ValidateServerProcess` bypass — the licensing client's Authenticode signature check (whose code-signing cert expired 2024-07-19) no longer rejects the licensing client.
+  - `LICENSE SYSTEM` error dispatcher bypass — the native `WinILicensingAdapter` no longer reports "Unity license information is invalid.".
+- The editor patch flow now applies these native patches before replacing `System.Security.Cryptography.Xml.dll`; restore reverts `Unity.exe` from its backup.
+- Known issue (2019.4): after the validity gates pass, the editor still reports `License is not active (com.unity.editor.ui)` because the generated ULF uses the legacy `<Features>` format while the licensing client resolves the newer `<EntitlementGroups>` format. See `docs/editor-dll-patching.md`.
 
 ### v2.7.0
 - Added language toggle (Chinese/English) with persistence across restarts.

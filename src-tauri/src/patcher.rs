@@ -13,6 +13,24 @@ fn hub_asar_path() -> PathBuf {
 /// ValidateSignature 包装函数的字节锚点（用于检测 Native AOT exe 是否已补丁）
 const VALIDATE_SIG_PATTERN: &str = "57 56 53 48 83 EC 20 48 8B DA 48 85 DB 74 ?? 48 8B 71 10 40 0F B6 79 18 48 8D 15 ?? ?? ?? ?? 48 39 11 74 ?? 48 8D 15 ?? ?? ?? ?? 48 39 11 75 ?? 48 8B D3";
 
+/// Unity 2019.4 编辑器中 `LicensingClient::ValidateServerProcess` 的决策点锚点。
+/// 2019.x 的编辑器在启动 Licensing Client 前会对其做 Authenticode 签名校验
+/// （WinVerifyTrust + 与内置 Unity 证书比对）。其签名证书在 2024 年过期后，
+/// 校验失败 → 编辑器回退到 Legacy licensing → 原生 WinILicensingAdapter 校验 ULF 失败，
+/// 最终 "Unity license information is invalid"。补丁把 `cmp edi, 9`（结果==9 成功）
+/// 改为 `cmp edi, edi`（恒等，ZF 恒为 1），使紧随其后的 `je` 恒跳转到成功分支，
+/// 从而无条件接受 Licensing Client（其 ULF 校验已由替换的 DLL 绕过）。
+/// 锚点含 je 的相对偏移与错误字符串的 LEA 相对偏移（均用 ?? 通配），
+/// 在同一条 2019.4 发布线内跨小版本兼容。
+const VALIDATE_SERVER_PROCESS_PATTERN: &str = "83 FF 09 0F 84 ?? ?? ?? ?? 49 8B CF 48 8D 15 ?? ?? ?? ?? 80 3C 11 00";
+
+/// Unity 2019.4 编辑器 `Licensing` 错误分发器（switch dispatcher）里
+/// 读取当前错误码的 `call [rax+0xD8]`。编辑器原生 `WinILicensingAdapter` 独立校验 ULF
+/// （原生 RSA 验签），失败时错误码 == 2 → "Unity license information is invalid" → 编辑器退出。
+/// 补丁把 `call [rax+0xD8]`（FF 90 D8 00 00 00）改为 `xor eax, eax`（31 C0 + 4×nop），
+/// 使错误码恒为 0（成功），从而不再产生 "license invalid" 错误。
+const LICENSE_SYSTEM_ERROR_PATTERN: &str = "48 8B 01 FF 90 D8 00 00 00 83 F8 50";
+
 /// Check EntitlementResolver DLL status
 pub fn get_editor_dll_status(dll_path: &str) -> String {
     let path = Path::new(dll_path);
@@ -152,6 +170,16 @@ pub fn patch_entitlement_resolver(dll_path: &str, display_version: Option<&str>)
         _ => return Err(format!("Unsupported Unity licensing target: {}", file_name)),
     };
 
+    // 2019.x 编辑器：Licensing Client 的 Authenticode 签名证书在 2024 年过期，
+    // 编辑器原生 `ValidateServerProcess` 校验失败后回退到 Legacy licensing（原生），
+    // 导致 ULF 校验失败。因此必须先补丁 Unity.exe 使其接受 Licensing Client，
+    // 其 ULF 校验再由下面替换的 DLL 绕过。
+    if file_name == "System.Security.Cryptography.Xml.dll" && major_version(target_version) == Some(2019) {
+        let exe_path = unity_exe_from_dll(dll_path)
+            .ok_or("Cannot derive Unity.exe path from licensing DLL path")?;
+        patch_unity_exe_validate_server_process(exe_path.to_string_lossy().as_ref())?;
+    }
+
     // 创建备份
     let bak_path = format!("{}.bak", dll_path);
     if !Path::new(&bak_path).exists() {
@@ -163,6 +191,63 @@ pub fn patch_entitlement_resolver(dll_path: &str, display_version: Option<&str>)
     Ok(format!("Patched: replaced with pre-patched DLL for Unity {} ({})", target_version, target_kind))
 }
 
+/// 解析版本号的主版本号（"2019.4.40f1" / "2019.4.40f1_ffc62b691db5" → 2019）
+fn major_version(version: &str) -> Option<u32> {
+    version
+        .split(|c: char| !c.is_ascii_digit() && c != '.')
+        .find(|t| !t.is_empty() && t.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .and_then(|t| t.split('.').next())
+        .and_then(|s| s.parse::<u32>().ok())
+}
+
+/// 从 licensing DLL 路径推导 Unity.exe 路径
+/// DLL: {EditorRoot}\Editor\Data\Resources\Licensing\Client\xxx.dll
+/// EXE: {EditorRoot}\Editor\Unity.exe
+fn unity_exe_from_dll(dll_path: &str) -> Option<PathBuf> {
+    let path = Path::new(dll_path);
+    let editor_dir = path.parent()?.parent()?.parent()?.parent()?.parent()?;
+    let exe = editor_dir.join("Unity.exe");
+    exe.exists().then_some(exe)
+}
+
+/// 补丁 Unity.exe 的 `LicensingClient::ValidateServerProcess`（Unity 2019.x 专用）。
+/// 将 `cmp edi, 9`（校验结果==9 才算成功）改为 `cmp edi, edi`（恒等，ZF 恒为 1），
+/// 使紧随其后的 `je` 恒跳转到成功分支，从而无条件接受 Licensing Client，
+/// 跳过已失效的 Authenticode 签名校验（证书过期后 WinVerifyTrust 失败）。
+pub fn patch_unity_exe_validate_server_process(exe_path: &str) -> Result<String, String> {
+    let path = Path::new(exe_path);
+    if !path.exists() {
+        return Err("Unity.exe not found".into());
+    }
+
+    // 首次创建备份，之后每次从备份恢复确保干净状态
+    let bak = format!("{}.bak", exe_path);
+    let bak_path = Path::new(&bak);
+    if !bak_path.exists() {
+        fs::copy(path, &bak).map_err(|e| e.to_string())?;
+    }
+    fs::copy(bak_path, path).map_err(|e| format!("Failed to restore from backup: {}", e))?;
+
+    let data = fs::read(path).map_err(|e| format!("Failed to read: {}", e))?;
+
+    // 补丁点 1：ValidateServerProcess 决策点（cmp edi,9 → cmp edi,edi）
+    let p1 = find_pattern(&data, VALIDATE_SERVER_PROCESS_PATTERN)
+        .ok_or("ValidateServerProcess anchor not found (editor may not be Unity 2019.4)")?;
+
+    // 补丁点 2：Licensing 错误分发器（call [rax+0xD8] → xor eax,eax）
+    let p2 = find_pattern(&data, LICENSE_SYSTEM_ERROR_PATTERN)
+        .ok_or("LICENSE SYSTEM error dispatcher anchor not found (editor may not be Unity 2019.4)")?;
+
+    let mut f = fs::OpenOptions::new().write(true).open(path).map_err(|e| e.to_string())?;
+    // P1：cmp edi,9（83 FF 09）→ cmp edi,edi + nop（3B FF 90）
+    f.seek(SeekFrom::Start(p1)).map_err(|e| e.to_string())?;
+    f.write_all(&[0x3B, 0xFF, 0x90]).map_err(|e| e.to_string())?;
+    // P2：call [rax+0xD8]（FF 90 D8 00 00 00）→ xor eax,eax + 4×nop（31 C0 90 90 90 90）
+    f.seek(SeekFrom::Start(p2 + 3)).map_err(|e| e.to_string())?;
+    f.write_all(&[0x31, 0xC0, 0x90, 0x90, 0x90, 0x90]).map_err(|e| e.to_string())?;
+    Ok("Patched ValidateServerProcess + LICENSE SYSTEM dispatcher (2 areas)".into())
+}
+
 /// Restore DLL from backup
 pub fn restore(dll_path: &str) -> Result<String, String> {
     let bak_path = format!("{}.bak", dll_path);
@@ -172,6 +257,18 @@ pub fn restore(dll_path: &str) -> Result<String, String> {
     }
     fs::copy(bak, dll_path).map_err(|e| e.to_string())?;
     fs::remove_file(bak).map_err(|e| e.to_string())?;
+
+    // 若曾补丁过 Unity.exe（2019.x），一并恢复
+    if let Some(exe_path) = unity_exe_from_dll(dll_path) {
+        let exe_bak = format!("{}.bak", exe_path.display());
+        let exe_bak_path = Path::new(&exe_bak);
+        if exe_bak_path.exists() {
+            fs::copy(exe_bak_path, &exe_path).map_err(|e| format!("Failed to restore Unity.exe: {}", e))?;
+            fs::remove_file(exe_bak_path).map_err(|e| e.to_string())?;
+            eprintln!("✓ Restored Unity.exe");
+        }
+    }
+
     Ok(format!("Restored: {}", dll_path))
 }
 
@@ -805,6 +902,66 @@ mod tests {
         }
         assert!(patched_js >= 2, "应至少 2 个 JS 含补丁标记，实际 {}", patched_js);
         assert!(fake_license, "licenseQueryService.getLicense 应返回假 Pro 许可证");
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// 对 Unity 2019.4.40 原始 Unity.exe 的副本应用 ValidateServerProcess 补丁，
+    /// 验证恰好命中 1 个锚点、1 个写入点（3 字节），且补丁字节为 cmp edi,edi; nop。
+    #[test]
+    fn validate_server_process_patch_applies_to_real_binary() {
+        let exe = r"D:/Unity/Editor/2019.4.40f1/Editor/Unity.exe";
+        let src_bak = r"D:/Unity/Editor/2019.4.40f1/Editor/Unity.exe.bak";
+        let src = if Path::new(src_bak).exists() { src_bak } else { exe };
+        if !Path::new(src).exists() {
+            eprintln!("SKIP: {} not found", src);
+            return;
+        }
+
+        let tmp = std::env::temp_dir().join(format!("unifree_unityexe_test_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let unity_exe = tmp.join("Unity.exe");
+        std::fs::copy(src, &unity_exe).unwrap();
+
+        let result = patch_unity_exe_validate_server_process(unity_exe.to_string_lossy().as_ref()).unwrap();
+        assert_eq!(result, "Patched ValidateServerProcess + LICENSE SYSTEM dispatcher (2 areas)");
+
+        // 对比补丁后的 exe 与其自身 .bak，收集所有差异区间
+        let patched = std::fs::read(&unity_exe).unwrap();
+        let original = std::fs::read(format!("{}.bak", unity_exe.to_string_lossy())).unwrap();
+        assert_eq!(patched.len(), original.len(), "补丁不应改变文件大小");
+
+        let mut regions: Vec<(u64, u64)> = Vec::new();
+        let mut i = 0usize;
+        while i < patched.len() {
+            if patched[i] != original[i] {
+                let start = i as u64;
+                let mut end = i;
+                while end < patched.len() && patched[end] != original[end] {
+                    end += 1;
+                }
+                regions.push((start, (end - i) as u64));
+                i = end;
+            } else {
+                i += 1;
+            }
+        }
+        // P1: cmp edi,9（83 FF 09）→ cmp edi,edi + nop（3B FF 90）：中间字节 FF 不变，
+        //     因此是两个相距 2 字节的单字节区。
+        // P2: call [rax+0xD8]（FF 90 D8 00 00 00）→ xor eax,eax + 4×nop（31 C0 90 90 90 90）：
+        //     6 字节全部改变，是一个 6 字节区。
+        assert_eq!(regions.len(), 3, "应恰好 3 个差异区（P1 两个单字节 + P2 一个 6 字节），实际: {:?}", regions);
+        let (off0, len0) = regions[0];
+        let (off1, len1) = regions[1];
+        let (off2, len2) = regions[2];
+        assert_eq!((len0, len1, len2), (1, 1, 6), "差异区长度应为 1,1,6");
+        assert_eq!(off1 - off0, 2, "P1 的两个差异字节应相距 2 字节（中间 FF 不变）");
+        assert_eq!(original[off0 as usize], 0x83, "P1 第 1 字节原应为 0x83");
+        assert_eq!(patched[off0 as usize], 0x3B, "P1 第 1 字节补丁应为 0x3B");
+        assert_eq!(original[off1 as usize], 0x09, "P1 第 2 字节原应为 0x09");
+        assert_eq!(patched[off1 as usize], 0x90, "P1 第 2 字节补丁应为 0x90");
+        assert_eq!(&original[off2 as usize..off2 as usize + 6], &[0xFF, 0x90, 0xD8, 0x00, 0x00, 0x00], "P2 原应为 call [rax+0xD8]");
+        assert_eq!(&patched[off2 as usize..off2 as usize + 6], &[0x31, 0xC0, 0x90, 0x90, 0x90, 0x90], "P2 补丁应为 xor eax,eax + 4×nop");
 
         std::fs::remove_dir_all(&tmp).ok();
     }

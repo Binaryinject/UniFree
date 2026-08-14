@@ -1,4 +1,4 @@
-# UniFree 2.7.0
+# UniFree 2.8.0
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -121,9 +121,16 @@ MIT 许可证 - 详见 [LICENSE](LICENSE)
 
 ---
 
-**UniFree 2.7.0** - Unity 许可证自由工具
+**UniFree 2.8.0** - Unity 许可证自由工具
 
 ## 更新日志
+
+### v2.8.0
+- **Unity 2019.4 原生补丁**：为 2019.x 编辑器新增两个基于锚点的 `Unity.exe` 字节级补丁：
+  - 绕过 `ValidateServerProcess` —— Licensing Client 的 Authenticode 签名校验（代码签名证书已于 2024-07-19 过期）不再拒绝 Licensing Client。
+  - 绕过 `LICENSE SYSTEM` 错误分发器 —— 原生 `WinILicensingAdapter` 不再报 "Unity license information is invalid."。
+- 编辑器补丁流程现在先应用这两个原生补丁，再替换 `System.Security.Cryptography.Xml.dll`；恢复时一并还原 `Unity.exe`。
+- 已知问题（2019.4）：通过校验关卡后，编辑器仍报 `License is not active (com.unity.editor.ui)`，因为生成的 ULF 是旧版 `<Features>` 格式，而 Licensing Client 按新版 `<EntitlementGroups>` 格式解析。详见 `docs/editor-dll-patching.md`。
 
 ### v2.7.0
 - 新增中英文语言切换，并持久化用户选择（重启后记住）。
