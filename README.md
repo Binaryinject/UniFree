@@ -1,3 +1,5 @@
+
+
 # UniFree 2.8.0
 
 [English](README.md) | [中文](README_CN.md)
@@ -86,7 +88,7 @@ For 6000.7+, the binary is .NET 10 Native AOT compiled (no IL). Patches use patt
 ### Prerequisites
 
 - Node.js 18+
-- Rust 1.70+
+- Rust 1.85+
 
 ### Build Steps
 
