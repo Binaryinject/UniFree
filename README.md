@@ -1,6 +1,4 @@
-
-
-# UniFree 2.8.0
+# UniFree 2.8.1
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -76,9 +74,10 @@ For 6000.7+, the binary is .NET 10 Native AOT compiled (no IL). Patches use patt
 |-----------|------|--------|
 | Hub | `app.asar` | Rebuild in-place (preserve unpacked markers), patch `getLicense`/`isLicenseValid` |
 | Hub | `Unity Hub.exe` | Flip Electron `EnableEmbeddedAsarIntegrityValidation` fuse |
+| Hub | `UnityLicensingClient_V1\Unity.Licensing.EntitlementResolver.dll` | Replace with pre-patched DLL (v2.8.1, 1.17.x line) |
 | Hub | `hubConfig.json` | Update sign-in and update settings |
 | Editor (6000.7+) | `Unity.Licensing.Client.exe` | Byte-level binary patch (1 anchor-based patch) |
-| Editor (6000.0-6000.6) | `Unity.Licensing.EntitlementResolver.dll` | Replace with pre-patched DLL |
+| Editor (6000.0-6000.6) | `Unity.Licensing.EntitlementResolver.dll` | Replace with pre-patched DLL (per 1.17.x / 1.18+ line, v2.8.1) |
 | Editor (2019.x) | `Unity.exe` + `System.Security.Cryptography.Xml.dll` | Native anchor patch + replace with pre-patched DLL |
 | Editor (2020-2022) | `System.Security.Cryptography.Xml.dll` | Replace with pre-patched DLL |
 | License | `C:\ProgramData\Unity\Unity_lic.ulf` | Generate RSA-signed license file |
@@ -125,9 +124,27 @@ MIT License - See [LICENSE](LICENSE) for details
 
 ---
 
-**UniFree 2.8.0** - Unity License Freedom Tool
+**UniFree 2.8.1** - Unity License Freedom Tool
 
 ## Changelog
+
+### v2.8.1
+- **Fixed "No valid Unity Editor license found." after patching 6000.3.10f1 (LocalIPC 1.17.x)**:
+  - Pre-patched resolvers are now selected per licensing-client release line: 1.17.x (e.g. 6000.3.10f1,
+    original assembly version 1.17.4.0, v7 references) uses a patched DLL generated from the 1.17.4
+    original with the assembly version preserved (`Unity.Licensing.EntitlementResolver.1.17.4.dll`);
+    1.18+ (e.g. 6000.3.20f1/22f1, 0.0.0.0, v8 references) keeps the bundled one. The old 0.0.0.0
+    patched DLL crashed the 1.17.4 client at startup (deps version mismatch:
+    `Could not load file or assembly '…, Version=1.17.4.0'`).
+  - **The Hub's licensing client resolver is patched as well** (`Unity.Licensing.EntitlementResolver.hub.1.17.4.dll`):
+    editors launched from the Hub now pass the ULF signature check through the Hub's licensing client
+    (global pipe `LicenseClient-wbn`) — **no standalone IPC process needed, no UniFree resident;
+    patch once and it survives restarts**. 1.18+ editors' own licensing clients are unaffected
+    (separate folder/process/versioned pipe; the Hub client still answers them with
+    `505 Unsupported protocol version`).
+  - Added `tools/patchresolver`: one-click generation of a same-line patched resolver from any
+    1.17.x original.
+  - See `docs/editor-dll-patching.md` for details.
 
 ### v2.8.0
 - **Unity 2019.4 native patch**: added two anchor-based byte patches to `Unity.exe` for 2019.x editors:
@@ -156,7 +173,7 @@ MIT License - See [LICENSE](LICENSE) for details
   - `flip_hub_exe_fuses()` disables the asar-integrity fuse in `Unity Hub.exe` (Electron fuse wire: `[magic][ver=01][len=09][ASCII bits]`, fuse 4).
   - `rewrite_hub_asar()` rebuilds `app.asar` in-place while preserving the 10 `unpacked` native-module markers (AsarWriter would drop them → `Cannot find native binding`).
   - Patches `licenseQueryService.getLicense()` to return a fake Unity Pro ULF so the Hub **displays** the license, plus `isLicenseValid()` → `true`.
-- Hub licensing client (managed .NET, `EntitlementResolver.dll` 1.17.4) is a different architecture from Editor 6000.7+ Native AOT; no DLL is replaced.
+- Hub licensing client (managed .NET, `EntitlementResolver.dll` 1.17.4, same version line as 6000.3.10f1-class editors) is a different architecture from Editor 6000.7+ Native AOT; since v2.8.1 the Hub's licensing client resolver is also replaced with a pre-patched version, so editors launched from the Hub pass the ULF signature check through the Hub's licensing client (global pipe `LicenseClient-wbn`) — no standalone IPC process needed, patch once and it survives restarts (see `docs/editor-dll-patching.md`).
 
 ### v2.5.7
 - **6000.7+ patch simplified to a single byte-level patch**: short-circuits the `ValidateSignature` wrapper (`sub_1404F1C10`) with `mov eax,1; ret`, replacing the previous 2-patch (signature gate + LABEL_14 trust check) and the original 4-patch approach

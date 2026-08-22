@@ -55,6 +55,8 @@ pub fn get_editor_dll_status(dll_path: &str) -> String {
         }
         "Unity.Licensing.EntitlementResolver.dll" => {
             data.as_slice() == include_bytes!("../resources/win/Unity.Licensing.EntitlementResolver.dll").as_slice()
+                || data.as_slice()
+                    == include_bytes!("../resources/win/Unity.Licensing.EntitlementResolver.1.17.4.dll").as_slice()
         }
         "Unity.Licensing.Client.exe" => {
             // Native AOT：定位 ValidateSignature 包装函数，检查函数头是否为 mov eax,1; ret
@@ -163,10 +165,32 @@ pub fn patch_entitlement_resolver(dll_path: &str, display_version: Option<&str>)
             "2019-2022",
             include_bytes!("../resources/win/System.Security.Cryptography.Xml.dll"),
         ),
-        "Unity.Licensing.EntitlementResolver.dll" => (
-            "6000.0-6000.6",
-            include_bytes!("../resources/win/Unity.Licensing.EntitlementResolver.dll"),
-        ),
+        "Unity.Licensing.EntitlementResolver.dll" => {
+            // 预编译补丁 DLL 必须与 editor 自带 licensing client 的 LocalIPC 线匹配：
+            // - LocalIPC 1.17.x（如 6000.3.10f1）：原版 EntitlementResolver 程序集版本为
+            //   1.17.4.0（引用 v7 运行时），必须使用基于 1.17.4 原版生成的补丁 DLL
+            //   （保留程序集版本 1.17.4.0），否则 client 启动即抛
+            //   "Could not load file or assembly 'Unity.Licensing.EntitlementResolver,
+            //    Version=1.17.4.0'"。
+            // - LocalIPC 1.18+（如 6000.3.20f1/22f1）：原版解析器程序集版本为 0.0.0.0
+            //   （引用 v8 运行时），使用当前捆绑的 0.0.0.0 补丁 DLL。
+            // 版本线从 Unity.Licensing.Client.deps.json 中的 "Unity.Licensing.Client/<ver>" 读取。
+            let client_dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+            if licensing_client_version(&client_dir)
+                .map(|v| v.starts_with("1.17"))
+                .unwrap_or(false)
+            {
+                (
+                    "6000.0-6000.6 (LocalIPC 1.17.x)",
+                    include_bytes!("../resources/win/Unity.Licensing.EntitlementResolver.1.17.4.dll"),
+                )
+            } else {
+                (
+                    "6000.0-6000.6 (LocalIPC 1.18+)",
+                    include_bytes!("../resources/win/Unity.Licensing.EntitlementResolver.dll"),
+                )
+            }
+        }
         _ => return Err(format!("Unsupported Unity licensing target: {}", file_name)),
     };
 
@@ -188,7 +212,23 @@ pub fn patch_entitlement_resolver(dll_path: &str, display_version: Option<&str>)
 
     // 写入版本对应的补丁DLL
     fs::write(path, patched_dll).map_err(|e| format!("Failed to write patched DLL: {}", e))?;
-    Ok(format!("Patched: replaced with pre-patched DLL for Unity {} ({})", target_version, target_kind))
+
+    Ok(format!(
+        "Patched: replaced with pre-patched DLL for Unity {} ({})",
+        target_version, target_kind
+    ))
+}
+
+/// 从 Unity.Licensing.Client.deps.json 读取 licensing client 发行线版本
+/// （JSON 库键形如 "Unity.Licensing.Client/1.17.4"），用于选择匹配的补丁 DLL。
+fn licensing_client_version(client_dir: &Path) -> Option<String> {
+    const MARKER: &str = "Unity.Licensing.Client/";
+    let content = fs::read_to_string(client_dir.join("Unity.Licensing.Client.deps.json")).ok()?;
+    let start = content.find(MARKER)? + MARKER.len();
+    let rest = &content[start..];
+    let end = rest.find(|c: char| !(c.is_ascii_digit() || c == '.'))?;
+    let ver = &rest[..end];
+    (!ver.is_empty()).then(|| ver.to_string())
 }
 
 /// 解析版本号的主版本号（"2019.4.40f1" / "2019.4.40f1_ffc62b691db5" → 2019）
@@ -269,6 +309,9 @@ pub fn restore(dll_path: &str) -> Result<String, String> {
         }
     }
 
+    // 恢复后结束接管用的 licensing client，让 Hub 的 client 重新接管全局管道
+    kill_process("Unity.Licensing.Client.exe").ok();
+
     Ok(format!("Restored: {}", dll_path))
 }
 
@@ -284,10 +327,16 @@ fn hub_patch_state() -> String {
     };
 
     let hub_dir = resources_path.parent().unwrap_or(resources_path);
-    let xml_dll_bak = hub_dir
-        .join("UnityLicensingClient_V1")
+    let licensing_dir = hub_dir.join("UnityLicensingClient_V1");
+    let xml_dll_bak = licensing_dir
         .join("System.Security.Cryptography.Xml.dll.bak");
     if xml_dll_bak.exists() {
+        return "patched".into();
+    }
+
+    // Hub licensing client 的 EntitlementResolver 补丁（< 6000.7 编辑器从 Hub 启动的方案）
+    let resolver_bak = licensing_dir.join("Unity.Licensing.EntitlementResolver.dll.bak");
+    if resolver_bak.exists() {
         return "patched".into();
     }
 
@@ -384,6 +433,16 @@ pub fn patch_hub(disable_signin: bool, disable_update: bool) -> Result<String, S
 
     let patched_files = rewrite_hub_asar(&asar_path, disable_signin, disable_update)?;
 
+    // Hub 自带 licensing client（UnityLicensingClient_V1）的 EntitlementResolver 一并打补丁
+    // （LocalIPC 1.17.x 线，与编辑器 6000.3.10f1 等同一版本族）。
+    // 这样"从 Hub 启动的编辑器"经由 Hub 的 licensing client 也能通过 ULF 签名校验，
+    // **无需额外启动独立 IPC 进程**：Hub 启动/重启时自动拉起其 client（补丁一次永久生效）。
+    let hub_dir = asar_path.parent().and_then(|p| p.parent()).unwrap_or_else(|| Path::new(""));
+    let resolver_note = match patch_hub_licensing_client(hub_dir) {
+        Ok(n) => format!("; {}", n),
+        Err(e) => format!("; ⚠ Hub licensing client resolver 未打补丁: {}", e),
+    };
+
     // 更新本地 hubConfig.json
     eprintln!("Updating local hubConfig.json...");
     if let Err(e) = crate::config_patcher::update_hub_config(disable_signin, disable_update) {
@@ -392,7 +451,42 @@ pub fn patch_hub(disable_signin: bool, disable_update: bool) -> Result<String, S
         eprintln!("✓ hubConfig.json updated");
     }
 
-    Ok(format!("Hub patched: {} JS files modified in-place in app.asar (asar kept intact, no DLL replaced)", patched_files))
+    Ok(format!(
+        "Hub patched: {} JS files modified in-place in app.asar (asar kept intact);{}",
+        patched_files, resolver_note
+    ))
+}
+
+/// 替换 Hub 自带 licensing client 的 `Unity.Licensing.EntitlementResolver.dll`
+/// （LocalIPC 1.17.x）为预补丁版本：补丁 ValidateSignature 使其接受任意签名的 ULF。
+/// 备份为 `<dll>.bak`；已补丁（内容一致）时跳过。需要管理员权限（Program Files）。
+fn patch_hub_licensing_client(hub_dir: &Path) -> Result<String, String> {    let licensing_dir = hub_dir.join("UnityLicensingClient_V1");
+    let resolver = licensing_dir.join("Unity.Licensing.EntitlementResolver.dll");
+    if !resolver.exists() {
+        return Err(format!("not found: {}", resolver.display()));
+    }
+    let ver = licensing_client_version(&licensing_dir).unwrap_or_else(|| "unknown".into());
+    if !ver.starts_with("1.17") {
+        return Err(format!("licensing client 版本 {} 非 1.17.x，暂未适配", ver));
+    }
+    // 只结束 Hub 目录下的 licensing client（另一个进程会随后重新拉起并加载补丁后的 DLL）；
+    // 不碰编辑器自己的 client（1.18+ 编辑器走独立目录/独立进程/版本化管道，互不影响）
+    kill_hub_licensing_clients(&licensing_dir);
+
+    // 幂等：已是补丁版本则直接返回
+    let patched: &[u8] =
+        include_bytes!("../resources/win/Unity.Licensing.EntitlementResolver.hub.1.17.4.dll");
+    if fs::read(&resolver).map(|d| d.as_slice() == patched).unwrap_or(false) {
+        return Ok("hub licensing client resolver already patched".into());
+    }
+
+    // 备份 + 替换
+    let bak = licensing_dir.join("Unity.Licensing.EntitlementResolver.dll.bak");
+    if !bak.exists() {
+        fs::copy(&resolver, &bak).map_err(|e| format!("Failed to backup hub resolver: {}", e))?;
+    }
+    fs::write(&resolver, patched).map_err(|e| format!("Failed to write patched hub resolver: {}", e))?;
+    Ok("hub licensing client resolver patched (LocalIPC 1.17.x); editors launched from Hub now bypass ULF signature check".into())
 }
 
 /// 根据 app.asar 路径推导 Hub 可执行文件路径（fuse 存在 exe 里）
@@ -453,6 +547,32 @@ fn flip_hub_exe_fuses(exe_path: &Path) -> Result<bool, String> {
 /// 在字节切片中查找子序列，返回偏移
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// 结束可执行文件位于指定 licensing client 目录下的 Unity.Licensing.Client 进程
+/// （仅限 Windows；其他平台无此必要）。只按 Hub 目录过滤，避免误杀
+/// 1.18+ 编辑器自己目录下的 licensing client 进程。
+fn kill_hub_licensing_clients(licensing_dir: &Path) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let prefix = licensing_dir.to_string_lossy().replace('\'', "''");
+        let script = format!(
+            "Get-CimInstance Win32_Process -Filter \"Name='Unity.Licensing.Client.exe'\" | \
+             Where-Object {{ $_.ExecutablePath -like '{0}*' }} | \
+             ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
+            prefix
+        );
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &script])
+            .creation_flags(0x08000000)
+            .output();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = licensing_dir;
+        kill_process("Unity.Licensing.Client").ok();
+    }
 }
 
 /// 读取 app.asar，完整重建：保留 app.asar.unpacked/ 里 native 模块的 unpacked 标记，
@@ -668,7 +788,7 @@ pub fn restore_hub() -> Result<String, String> {
         fs::rename(&asar_bak, &asar_path).map_err(|e| format!("Failed to restore asar: {}", e))?;
     }
 
-    // 恢复 Hub XML DLL 和 Licensing Client
+    // 恢复 Hub XML DLL
     let hub_dir = resources_path.parent().ok_or("Cannot get Hub directory")?;
     let licensing_dir = hub_dir.join("UnityLicensingClient_V1");
     let xml_dll_path = licensing_dir.join("System.Security.Cryptography.Xml.dll");
@@ -680,6 +800,18 @@ pub fn restore_hub() -> Result<String, String> {
         }
         fs::rename(&xml_dll_bak, &xml_dll_path).map_err(|e| format!("Failed to restore XML DLL: {}", e))?;
         eprintln!("✓ Restored original XML DLL");
+    }
+
+    // 恢复 Hub licensing client 的 EntitlementResolver（若被补丁过）
+    let hub_resolver = licensing_dir.join("Unity.Licensing.EntitlementResolver.dll");
+    let hub_resolver_bak = licensing_dir.join("Unity.Licensing.EntitlementResolver.dll.bak");
+    if hub_resolver_bak.exists() {
+        if hub_resolver.exists() {
+            fs::remove_file(&hub_resolver).map_err(|e| format!("Failed to remove patched hub resolver: {}", e))?;
+        }
+        fs::rename(&hub_resolver_bak, &hub_resolver)
+            .map_err(|e| format!("Failed to restore hub resolver: {}", e))?;
+        eprintln!("✓ Restored hub licensing client resolver");
     }
 
     // 恢复 Licensing Client（如果被禁用）

@@ -1,4 +1,4 @@
-# UniFree 2.8.0
+# UniFree 2.8.1
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -73,9 +73,10 @@ UniFree 就地重建 `app.asar`（保留 `app.asar.unpacked/` 里的 native 模�
 |------|------|------|
 | Hub | `app.asar` | 就地重建（保留 unpacked 标记），补丁 `getLicense`/`isLicenseValid` |
 | Hub | `Unity Hub.exe` | 翻转 Electron `EnableEmbeddedAsarIntegrityValidation` fuse |
+| Hub | `UnityLicensingClient_V1\Unity.Licensing.EntitlementResolver.dll` | 替换为预补丁 DLL（v2.8.1，1.17.x 线） |
 | Hub | `hubConfig.json` | 更新登录和更新设置 |
 | Editor (6000.7+) | `Unity.Licensing.Client.exe` | 字节级二进制补丁（1 个锚点补丁） |
-| Editor (6000.0-6000.6) | `Unity.Licensing.EntitlementResolver.dll` | 替换为预补丁 DLL |
+| Editor (6000.0-6000.6) | `Unity.Licensing.EntitlementResolver.dll` | 替换为预补丁 DLL（按 1.17.x / 1.18+ 发行线选择，v2.8.1） |
 | Editor (2019-2022) | `System.Security.Cryptography.Xml.dll` | 替换为预补丁 DLL |
 | License | `C:\ProgramData\Unity\Unity_lic.ulf` | 生成 RSA 签名的许可证文件 |
 
@@ -121,9 +122,24 @@ MIT 许可证 - 详见 [LICENSE](LICENSE)
 
 ---
 
-**UniFree 2.8.0** - Unity 许可证自由工具
+**UniFree 2.8.1** - Unity 许可证自由工具
 
 ## 更新日志
+
+### v2.8.1
+- **修复 6000.3.10f1（LocalIPC 1.17.x）补丁后仍报 "No valid Unity Editor license found."**：
+  - 按 licensing client 发行线选择预补丁解析器：1.17.x（如 6000.3.10f1，原版程序集版本 1.17.4.0、v7 引用）
+    使用基于 1.17.4 原版生成、保留程序集版本的补丁 DLL（`Unity.Licensing.EntitlementResolver.1.17.4.dll`），
+    1.18+（如 6000.3.20f1/22f1，0.0.0.0、v8 引用）沿用原捆绑版本；
+    旧版 0.0.0.0 补丁 DLL 装入 1.17.4 client 会因 deps 版本不匹配启动即崩
+    （`Could not load file or assembly '…, Version=1.17.4.0'`）。
+  - **Hub licensing client 的 resolver 一并打补丁**（`Unity.Licensing.EntitlementResolver.hub.1.17.4.dll`）：
+    从 Hub 启动的编辑器经由 Hub 的 licensing client（全局管道 `LicenseClient-wbn`）也能通过
+    ULF 签名校验，**无需启动独立 IPC 进程、无需 UniFree 常驻，补丁一次永久生效（含重启）**；
+    不影响 1.18+ 编辑器自己的 licensing client（独立目录/进程/版本化管道，Hub client 仍对其回
+    `505 Unsupported protocol version`）。
+  - 新增 `tools/patchresolver`：基于任意 1.17.x 原版一键生成同线预补丁解析器。
+  - 详见 `docs/editor-dll-patching.md`。
 
 ### v2.8.0
 - **Unity 2019.4 原生补丁**：为 2019.x 编辑器新增两个基于锚点的 `Unity.exe` 字节级补丁：
@@ -157,8 +173,11 @@ MIT 许可证 - 详见 [LICENSE](LICENSE)
     （AsarWriter 会丢掉 → 报 `Cannot find native binding`）
   - patch `licenseQueryService.getLicense()` 返回假的 Unity Pro ULF，让 Hub **显示**许可证；
     `isLicenseValid()` → true
-- Hub 的 licensing client（managed .NET，`EntitlementResolver.dll` 1.17.4）与 Editor 6000.7+
-  Native AOT 是两套架构；不替换任何 DLL。
+- Hub 的 licensing client（managed .NET，`Unity.Licensing.EntitlementResolver.dll` 1.17.4，与
+  Editor 6000.3.10f1 等 1.17.x 编辑器同一版本族）与 Editor 6000.7+ Native AOT 是两套架构；
+  **同时替换 Hub licensing client 的 resolver 为预补丁版本**（v2.8.1 起）：从 Hub 启动的
+  编辑器经由 Hub 的 licensing client（全局管道 `LicenseClient-wbn`）也能通过 ULF 签名校验，
+  无需启动独立 IPC 进程，补丁一次永久生效（含重启后，见 `docs/editor-dll-patching.md`）。
 
 ### v2.5.7
 - **6000.7+ 补丁精简为单个字节级补丁**：将 `ValidateSignature` 包装函数（sub_1404F1C10）

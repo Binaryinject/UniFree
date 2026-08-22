@@ -12,7 +12,7 @@ Unity Editor 使用 `Unity.Licensing.EntitlementResolver.dll`（< 6000.7）或
 |-----------|---------|---------|---------|
 | 2019.x | `System.Security.Cryptography.Xml.dll` + `Unity.exe` | .NET IL DLL + 原生 PE | 替换 DLL + 原生字节级 patch（见下文） |
 | 2020 ~ 2022 | `System.Security.Cryptography.Xml.dll` | .NET IL DLL | 替换预编译 DLL |
-| 6000.0 ~ 6000.6 | `Unity.Licensing.EntitlementResolver.dll` | .NET IL DLL | 替换预编译 DLL |
+| 6000.0 ~ 6000.6 | `Unity.Licensing.EntitlementResolver.dll` | .NET IL DLL | 替换预编译 DLL（按 client 发行线 1.17.x / 1.18+ 选择，见下文） |
 | **>= 6000.7** | **`Unity.Licensing.Client.exe`** | **Native AOT PE** | **字节级 patch（见下文）** |
 
 ---
@@ -306,12 +306,80 @@ fn main() {
 对于 < 6000.7 版本，`patch_entitlement_resolver()` 直接替换为预编译的补丁 DLL。
 预编译 DLL 按 Unity 主版本组织在 `src-tauri/resources/win/` 目录下。
 
-### 版本兼容性
+### 6000.0-6000.6 的两个发行线（LocalIPC 1.17.x vs 1.18+）
 
-| DLL 版本 | 文件大小 | 补丁方法 |
-|---------|---------|---------|
-| 1.18.1 (Editor) | ~341KB | 预编译 DLL |
-| 1.17.4 (Hub) | ~514KB | 不兼容，需 asar 补丁（JS-only，见下） |
+6000.3.x 编辑器自带的 licensing client 分两个发行线，**预编译补丁 DLL 必须与
+client 发行线匹配**，否则 editor 自带的 client 根本无法启动：
+
+| client 线 | 代表版本 | 原版 EntitlementResolver | 补丁 DLL |
+|-----------|---------|--------------------------|---------|
+| LocalIPC **1.17.x** | 6000.3.10f1 | 程序集版本 `1.17.4.0`、引用 v7 运行时、~514KB | `resources/win/Unity.Licensing.EntitlementResolver.1.17.4.dll` |
+| LocalIPC **1.18+** | 6000.3.20f1 / 6000.3.22f1 | 程序集版本 `0.0.0.0`、引用 v8 运行时、~514KB | `resources/win/Unity.Licensing.EntitlementResolver.dll` |
+
+**为什么必须匹配**：client 通过 `Unity.Licensing.Client.deps.json` 声明的库版本
+（`"Unity.Licensing.EntitlementResolver/1.17.4"`）加载解析器。把 0.0.0.0 的补丁
+DLL（1.18 线）装进 1.17.4 client 的目录后，1.17.4 client 启动即崩：
+
+```
+An unexpected error has occurred: System.IO.FileNotFoundException:
+Could not load file or assembly 'Unity.Licensing.EntitlementResolver, Version=1.17.4.0'.
+   at Unity.Licensing.Client.DependencyInjection.ConfigureSharedServices(...)
+```
+
+因此 1.17.x 线必须用**基于 1.17.4 原版生成的补丁 DLL**（`patchresolver` 工具：
+定位 `XmlExtensions.ValidateSignature` 中 `brtrue.s` + `ldstr "The digital signature
+is invalid."` + `newobj` + `throw` 序列，替换为 `pop; nop; nop; nop`，保留程序集
+版本 `1.17.4.0` 不变），1.18+ 线沿用原捆绑 0.0.0.0 补丁 DLL。
+client 线由 `Unity.Licensing.Client.deps.json` 中的 `"Unity.Licensing.Client/<ver>"`
+自动识别。
+
+### 从 Hub 启动编辑器时的授权链路（Hub licensing client 一并打补丁）
+
+Hub 3.20.0 启动时自带未补丁的 licensing client（`UnityLicensingClient_V1`，
+`--namedPipe Unity-LicenseClient-wbn`，LocalIPC 1.17.4）。**编辑器无论如何启动，
+都会先尝试连接全局管道 `LicenseClient-wbn`**：
+
+```
+编辑器 → 尝试连接全局管道 "LicenseClient-wbn"
+   ├─ Hub client 在（且版本匹配）→ 用 Hub client
+   │     10f1 (LocalIPC 1.17.4 == Hub 1.17.4) → Hub client 的 resolver 未补丁
+   │     → "Cannot load ULF license: The digital signature is invalid."
+   │     → "Found 0 entitlement groups" → "No valid Unity Editor license found."
+   │
+   ├─ Hub client 在（版本不匹配）→ 505 "Unsupported protocol version"
+   │     22f1 (LocalIPC 1.18.1 ≠ 1.17.4) → 编辑器启动自带 client（已补丁）→ 正常
+   │
+   └─ Hub client 不在 → 编辑器启动自带 client（已补丁）→ 正常
+```
+
+**解决方案（`patch_hub()` 中自动执行 `patch_hub_licensing_client()`）**：把 Hub 自带
+licensing client 的 `Unity.Licensing.EntitlementResolver.dll`（1.17.4，~514KB，与
+编辑器 6000.3.10f1 同一版本族）一并替换为预补丁 DLL（基于 Hub 原版生成、保留程序集
+版本 1.17.4.0；备份为 .bak，`restore_hub()` 恢复）。效果：
+
+- **无需额外启动任何独立 IPC 进程**：Hub 启动/重启时自动拉起其 client，补丁一次
+  永久生效（含重启、关机后）；
+- 从 Hub 启动的编辑器走 Hub client → `Processed 1 license files` →
+  `Found 1 entitlement groups` → 编辑器正常启动；
+- 直接启动编辑器走编辑器自己的补丁 client，同样正常；
+- 不依赖 UniFree 常驻，也不需要 runas/接管赛跑（因此不涉及早期方案里的
+  `EndpointPermissionDenied` / 随机管道回退问题）。
+- **不影响 1.18+ 编辑器的自己的 licensing client**：该 DLL 只被 Hub 目录下的
+  client 进程加载（`UnityLicensingClient_V1/`）；1.18+ 编辑器（20f1/22f1）用自己
+  `Editor\Data\Resources\Licensing\Client\` 目录下的 client 与补丁 resolver
+  （程序集版本 0.0.0.0、v8 引用），走版本化管道
+  （`Unity-LicenseClient-wbn-6000.3.22`）。Hub client 的协议检查在
+  `Unity.Licensing.Client.dll` 中、并未改动，因此仍会对 1.18.1 编辑器回
+  `505 Unsupported protocol version` → 编辑器继续用自己的补丁 client，行为不变。
+  补丁 Hub resolver 时也只结束 `UnityLicensingClient_V1` 目录下的 client 进程，
+  不会误杀编辑器自己的 client。
+- 仅支持 Hub licensing client LocalIPC **1.17.x**（由
+  `UnityLicensingClient_V1/Unity.Licensing.Client.deps.json` 识别）；
+  其他版本 line 时 `patch_hub()` 会输出警告并跳过该 DLL。
+
+> 注：Editor.log 中 `Code 1 while verifying Licensing Client signature ...
+> LicensingClient has failed validation; ignoring` 属正常现象（2019.x 同理），
+> 编辑器忽略该签名校验，随后 handshake 照常成功。
 
 ---
 
@@ -386,6 +454,14 @@ licensing client 进程仍会因原始 DLL 报 "signature invalid"，但 JS 层�
 
 ## 更新日志
 
+- 2026-08-22: 修复 6000.3.10f1（LocalIPC 1.17.4）patch 后仍报
+  "No valid Unity Editor license found."。根因：(1) 捆绑的 0.0.0.0 补丁
+  EntitlementResolver 与 1.17.4 client（deps 声明 1.17.4.0）不匹配，editor 自带
+  client 启动即 FileNotFoundException → 新增按发行线生成的
+  `Unity.Licensing.EntitlementResolver.1.17.4.dll`；(2) 从 Hub 启动的编辑器
+  使用 Hub 的未补丁 licensing client（版本匹配）→ 改为在 `patch_hub()` 中
+  一并替换 Hub licensing client 的 resolver（`Unity.Licensing.EntitlementResolver.hub.1.17.4.dll`），
+  无需启动独立 IPC 进程、无需 UniFree 常驻，补丁一次永久生效（含重启）。
 - 2026-08-03: Hub 3.20.0+ 改 JS-only 就地重建 asar 补丁 + exe fuse 翻转。
   根因有两层：(1) Hub 3.20.0 (Electron 43) 带 `OnlyLoadAppFromAsar` + 
   `EnableEmbeddedAsarIntegrityValidation` 双 fuse，旧"解包 app/ + 改名 .bak"直接退出，
