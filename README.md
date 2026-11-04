@@ -1,4 +1,4 @@
-# UniFree 2.8.2
+# UniFree 2.8.3
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -124,9 +124,32 @@ MIT License - See [LICENSE](LICENSE) for details
 
 ---
 
-**UniFree 2.8.2** - Unity License Freedom Tool
+**UniFree 2.8.3** - Unity License Freedom Tool
 
 ## Changelog
+
+### v2.8.3
+- **Hub 3.22.x entitlement-verdict gate covered**: Hub 3.22.0 (HUB-7120) replaced the boolean licence check with a
+  tri-state verdict (`ENTITLED` / `NOT_ENTITLED` / `UNVERIFIED`) served over `licenses/getEditorEntitlementDecision`.
+  `LicenseQueryService.checkEditorEntitlement()` and `checkUlfLicense()` now call the licensing client directly
+  (`checkEntitlements([com.unity.editor.ui])` / `getAllEntitlementGroups()`), so patching only `isLicenseValid()`
+  left the Hub's UI blocking paths and the project-open gate reading the client's real answer. Both verdict
+  producers are now patched to `ENTITLED` as well (`getLicense()` / `isLicenseValid()` patches unchanged).
+- **Patch state is detected by content, not by leftover `.bak` files**: the installer/uninstaller never removes
+  `app.asar.bak` / `*.dll.bak` / `Unity Hub.exe.bak`, so after a Hub reinstall or update the tool kept reporting
+  "patched" while the installer had already restored the pristine `app.asar` (that is what produced the
+  "no licence shown after restart, projects still open" report). Status now checks three independent points —
+  the in-asar JS marker, the resolver IL patch state, and the asar-integrity fuse byte — and reports
+  `patched` / `partial` / `original` accordingly.
+- **Stale backup guard**: before restoring from `app.asar.bak`, its embedded `package.json` version is compared with
+  the installed Hub's `ProductVersion`; a backup from a different Hub version is discarded instead of being copied
+  into the new install (which used to mix an old version's JS/file table into the new Hub).
+- **Sign-in bypass now covers the second default-config copy in 3.22**: patching only `DefaultLocalConfig-*.js`
+  left the editor-install container window (`installerContainerSetup-*.js` carries its own `DefaultLocalConfig`)
+  demanding a sign-in again. `DisableSignInRequired` / `DisableAutoUpdate` are now matched by content in any JS
+  file, and `tools/patch-hub-js.mjs` mirrors it together with the `hubConfig.json` keys written by
+  `config_patcher`.
+- "Restore original" is also offered for the `partial` state.
 
 ### v2.8.2
 - **In-place IL byte patch replaces pre-patched resolver DLLs (6000.0-6000.6 & Hub)**: instead of swapping in a

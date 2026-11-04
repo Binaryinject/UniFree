@@ -177,6 +177,12 @@ fn read_unity_exe_version(exe: &PathBuf) -> Option<String> {
 #[cfg(not(target_os = "windows"))]
 fn read_unity_exe_version(_exe: &PathBuf) -> Option<String> { None }
 
+/// 读取任意 PE 文件的 `ProductVersion`（Windows 版本资源）。
+/// 其他平台返回 None；用于嗅探 Hub 安装版本（patcher 判定陈旧 `.bak` 备份）。
+pub fn read_file_product_version(path: &std::path::Path) -> Option<String> {
+    read_unity_exe_version(&path.to_path_buf())
+}
+
 fn read_architecture(folder: &PathBuf) -> String {
     let metadata = folder.join("metadata.hub.json");
     if let Ok(content) = fs::read_to_string(&metadata) {

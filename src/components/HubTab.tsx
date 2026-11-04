@@ -184,7 +184,8 @@ export default function HubTab({ addLog, licenseStatus, isAdmin, hubStatus, onRe
   }
 
   const isPatched = hubStatus === "patched";
-  const canRestore = hubStatus === "patched";
+  // "partial"（例如 asar 已被安装器还原、只剩 resolver/exe fuse 残留）也应允许"恢复原版"
+  const canRestore = hubStatus === "patched" || hubStatus === "partial";
 
   return (
     <Box className="tab-content">

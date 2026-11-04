@@ -1,4 +1,4 @@
-# UniFree 2.8.2
+# UniFree 2.8.3
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -122,9 +122,29 @@ MIT 许可证 - 详见 [LICENSE](LICENSE)
 
 ---
 
-**UniFree 2.8.2** - Unity 许可证自由工具
+**UniFree 2.8.3** - Unity 许可证自由工具
 
 ## 更新日志
+
+### v2.8.3
+- **补齐 Hub 3.22.x 的三态授权门禁**：Hub 3.22.0（HUB-7120）把布尔式许可校验换成了三态 verdict
+  （`ENTITLED` / `NOT_ENTITLED` / `UNVERIFIED`），并通过 `licenses/getEditorEntitlementDecision` 暴露给渲染进程。
+  `LicenseQueryService.checkEditorEntitlement()` 与 `checkUlfLicense()` 会直连 licensing client
+  （`checkEntitlements([com.unity.editor.ui])` / `getAllEntitlementGroups()`），所以只补 `isLicenseValid()`
+  已不够：Hub 的 UI 阻塞点与项目打开门禁仍按客户端真实答复走。现在这两个 verdict 生产点也一并改成 `ENTITLED`
+  （`getLicense()` / `isLicenseValid()` 的补丁保持原样）。
+- **补丁状态改为按内容判定，不再看 `.bak` 残留**：安装器/卸载器都不会删除
+  `app.asar.bak` / `*.dll.bak` / `Unity Hub.exe.bak`，所以 Hub 重装或升级后本工具仍显示"已补丁"，
+  而安装器其实已经把 `app.asar` 还原成原版——这正是"重启后 Hub 显示没有许可证、但项目还能打开"的成因。
+  现在按三个独立补丁点判定（asar 内 JS 标记 / resolver IL 补丁状态 / asar 完整性 fuse 字节），
+  分别报 `patched` / `partial` / `original`。
+- **陈旧备份保护**：从 `app.asar.bak` 恢复前，先比对备份内 `package.json` 的版本与当前安装 Hub 的
+  `ProductVersion`；属于旧版本的备份直接丢弃，避免把上一版本的 JS 与文件表灌进新版本 Hub。
+- **跳过登录的补丁扩大到 3.22 的第二份默认值副本**：只改 `DefaultLocalConfig-*.js` 会让「从 Hub 安装编辑器」
+  的容器窗口（`installerContainerSetup-*.js` 里另有一份 `DefaultLocalConfig`）重新要求登录。现在按内容匹配
+  任意 JS 里的默认值行（`DisableSignInRequired` / `DisableAutoUpdate`），`tools/patch-hub-js.mjs` 同步支持，
+  并按 `config_patcher` 的语义一并写 `hubConfig.json` 的 `hubDisableSignInRequired` / `hubDisableAutoUpdate`。
+- `partial` 状态下也允许"恢复原版"。
 
 ### v2.8.2
 - **就地 IL 字节补丁取代预补丁 resolver DLL（6000.0-6000.6 与 Hub）**：不再按发行线替换重编译 DLL，

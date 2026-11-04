@@ -360,39 +360,88 @@ pub fn restore(dll_path: &str) -> Result<String, String> {
 
 
 
-/// 检查 Hub 是否已被补丁（XML DLL 备份 / asar 备份两者任一存在即视为 patched）
-/// 返回 "patched" / "original" / "error"
+/// 检查 Hub 是否已被补丁。
+///
+/// **按内容判定，不再以 `.bak` 备份是否存在为依据。** 备份文件在 Hub 升级/重装后
+/// 不会被安装器清掉（安装器只覆盖它自己的文件，卸载器也只删已知文件），于是会出现
+/// "重新装了 Hub，UniFree 仍显示已打补丁"——而 asar 其实已被安装器还原成原版。
+/// 反过来，用陈旧备份覆盖新安装的 asar 还会把旧版本的 JS 塞进新版本 Hub。
+///
+/// 三个补丁点独立检测，全命中 = "patched"，部分命中 = "partial"，全未命中 = "original"。
 fn hub_patch_state() -> String {
     let asar_path = hub_asar_path();
     let resources_path = match asar_path.parent() {
         Some(p) => p,
         None => return "error".into(),
     };
+    if !asar_path.exists() {
+        return "error".into();
+    }
 
     let hub_dir = resources_path.parent().unwrap_or(resources_path);
     let licensing_dir = hub_dir.join("UnityLicensingClient_V1");
-    let xml_dll_bak = licensing_dir
-        .join("System.Security.Cryptography.Xml.dll.bak");
-    if xml_dll_bak.exists() {
-        return "patched".into();
+
+    let mut total = 0usize;
+    let mut hits = 0usize;
+
+    // 补丁点 1：app.asar 内的 JS（getLicense / isLicenseValid / entitlement verdict）
+    total += 1;
+    if asar_has_patch_marker(&asar_path) {
+        hits += 1;
     }
 
-    // Hub licensing client 的 EntitlementResolver 补丁（< 6000.7 编辑器从 Hub 启动的方案）
-    let resolver_bak = licensing_dir.join("Unity.Licensing.EntitlementResolver.dll.bak");
-    if resolver_bak.exists() {
-        return "patched".into();
+    // 补丁点 2：Hub 自带 licensing client 的 ULF 签名校验（resolver IL）
+    total += 1;
+    if hub_resolver_patched(&licensing_dir) {
+        hits += 1;
     }
 
-    // 兼容旧版本：检查 asar 备份
-    let asar_bak = resources_path.join("app.asar.bak");
-    if asar_bak.exists() {
-        return "patched".into();
+    // 补丁点 3：Hub exe 的 asar 完整性 fuse（Electron 43+ 才有，缺失则不计入分母）
+    if let Some(exe) = hub_exe_path(&asar_path) {
+        if exe.exists() && hub_exe_fuse4(&exe).is_ok() {
+            total += 1;
+            if hub_exe_fuse_disabled(&exe) {
+                hits += 1;
+            }
+        }
     }
 
-    "original".into()
+    match hits {
+        0 => "original".into(),
+        h if h == total => "patched".into(),
+        _ => "partial".into(),
+    }
 }
 
-/// Check Hub status: "patched", "original", "error"
+/// app.asar 数据区里是否含 UniFree 的 JS 补丁标记（重建 asar 时写入）
+fn asar_has_patch_marker(asar_path: &Path) -> bool {
+    match fs::read(asar_path) {
+        Ok(data) => find_bytes(&data, b"patched by unifree").is_some(),
+        Err(_) => false,
+    }
+}
+
+/// Hub licensing client 的 `Unity.Licensing.EntitlementResolver.dll` 是否已补丁。
+/// 首选就地 IL 结构判定（不写入，只看 ValidateSignature 的 4 条指令是否已被改写）；
+/// resolver 缺失或结构不认识时，退化为老式 XML DLL 备份是否存在。
+fn hub_resolver_patched(licensing_dir: &Path) -> bool {
+    let resolver = licensing_dir.join("Unity.Licensing.EntitlementResolver.dll");
+    if let Ok(data) = fs::read(&resolver) {
+        if let Ok((_, report)) = crate::il_patch::patch_resolver(&data) {
+            if report.already_patched_sites > 0 {
+                return true;
+            }
+            if report.patched_sites > 0 {
+                return false;
+            }
+        }
+    }
+    licensing_dir
+        .join("System.Security.Cryptography.Xml.dll.bak")
+        .exists()
+}
+
+/// Check Hub status: "patched" / "partial" / "original" / "error"
 pub fn get_hub_status() -> String {
     hub_patch_state()
 }
@@ -453,9 +502,16 @@ pub fn patch_hub(disable_signin: bool, disable_update: bool) -> Result<String, S
         }
     }
 
-    // 首次创建备份，之后每次从备份恢复，确保在干净副本上补丁
+    // 首次创建备份，之后每次从备份恢复，确保在干净副本上补丁。
+    // 升级/重装 Hub 后安装器会把 asar 还原成原版，但旧 `.bak` 会残留：
+    // 若拿陈旧备份去覆盖新安装的 asar，会把上一版本的 JS/文件清单塞进新版本 Hub。
+    // 因此先核对备份所属的 Hub 版本，陈旧则丢弃重建。
     let bak_str = format!("{}.bak", asar_path.display());
     let bak_path = Path::new(&bak_str);
+    if bak_path.exists() && is_stale_hub_backup(bak_path, &asar_path) {
+        eprintln!("⚠ app.asar.bak 属于旧版本 Hub（陈旧备份），丢弃并以当前安装为干净基线");
+        fs::remove_file(bak_path).map_err(|e| format!("Failed to remove stale app.asar.bak: {}", e))?;
+    }
     if !bak_path.exists() {
         fs::copy(&asar_path, bak_path).map_err(|e| format!("Failed to backup app.asar: {}", e))?;
     }
@@ -603,19 +659,15 @@ fn hub_exe_path(asar_path: &Path) -> Option<PathBuf> {
     { Some(hub_dir.join("unityhub")) }
 }
 
-/// Hub 3.20.0+（Electron 43）的 exe 带 Electron fuses。把
-/// `EnableEmbeddedAsarIntegrityValidation`（fuse 4）从 '1' 翻转为 '0'，
-/// 使 Electron 不再校验 app.asar 头 JSON 的 SHA256（否则补丁后启动即 FATAL）。
-/// 返回是否发生了修改。首次修改前会备份 exe 为 `<exe>.bak`。
-fn flip_hub_exe_fuses(exe_path: &Path) -> Result<bool, String> {
-    const MAGIC: &[u8] = b"dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX";
-    const FUSE4: usize = 4; // EnableEmbeddedAsarIntegrityValidation
+const HUB_FUSE_MAGIC: &[u8] = b"dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX";
+const HUB_FUSE4: usize = 4; // EnableEmbeddedAsarIntegrityValidation
 
-    let data = fs::read(exe_path).map_err(|e| format!("Failed to read Hub exe: {}", e))?;
-    let pos = find_bytes(&data, MAGIC)
+/// 在已读入的 exe 字节里定位 fuse 4 的偏移
+fn hub_fuse4_offset(data: &[u8]) -> Result<usize, String> {
+    let pos = find_bytes(data, HUB_FUSE_MAGIC)
         .ok_or("Hub exe 中未找到 Electron fuses magic（可能不是 3.20.0+）")?;
-    let wire_start = pos + MAGIC.len();
-    if data.len() < wire_start + 2 + FUSE4 {
+    let wire_start = pos + HUB_FUSE_MAGIC.len();
+    if data.len() < wire_start + 2 + HUB_FUSE4 {
         return Err("fuse 段过短".into());
     }
     let version = data[wire_start];
@@ -623,27 +675,97 @@ fn flip_hub_exe_fuses(exe_path: &Path) -> Result<bool, String> {
     if version != 1 {
         return Err(format!("未知的 fuse 版本: {}", version));
     }
-    if FUSE4 >= length {
+    if HUB_FUSE4 >= length {
         return Err("fuse 段长度不足（无 fuse4）".into());
     }
-    let fuse4_off = wire_start + 2 + FUSE4;
-    let cur = data[fuse4_off];
+    let off = wire_start + 2 + HUB_FUSE4;
+    let cur = data[off];
     if cur != b'1' && cur != b'0' {
         return Err(format!("fuse4 字节异常: 0x{:02X}", cur));
     }
-    if cur == b'0' {
+    Ok(off)
+}
+
+/// 读取 Hub exe 里 fuse 4（`EnableEmbeddedAsarIntegrityValidation`）的当前字节（'0'/'1'）。
+/// 与补丁写入解耦，供状态检测复用。
+fn hub_exe_fuse4(exe_path: &Path) -> Result<u8, String> {
+    let data = fs::read(exe_path).map_err(|e| format!("Failed to read Hub exe: {}", e))?;
+    let off = hub_fuse4_offset(&data)?;
+    Ok(data[off])
+}
+
+/// fuse 4 是否已被翻转为 '0'（即 asar 完整性校验已关闭）
+fn hub_exe_fuse_disabled(exe_path: &Path) -> bool {
+    matches!(hub_exe_fuse4(exe_path), Ok(b'0'))
+}
+
+/// Hub 3.20.0+（Electron 43）的 exe 带 Electron fuses。把
+/// `EnableEmbeddedAsarIntegrityValidation`（fuse 4）从 '1' 翻转为 '0'，
+/// 使 Electron 不再校验 app.asar 头 JSON 的 SHA256（否则补丁后启动即 FATAL）。
+/// 返回是否发生了修改。首次修改前会备份 exe 为 `<exe>.bak`。
+fn flip_hub_exe_fuses(exe_path: &Path) -> Result<bool, String> {
+    let mut data = fs::read(exe_path).map_err(|e| format!("Failed to read Hub exe: {}", e))?;
+    let fuse4_off = hub_fuse4_offset(&data)?;
+    if data[fuse4_off] == b'0' {
         return Ok(false); // 已关闭
     }
 
-    // 翻转前备份 exe
+    // 翻转前备份 exe（旧版本残留的 `<exe>.bak` 会被换成本次安装的原版，避免恢复时写回旧 exe）
     let bak = format!("{}.bak", exe_path.display());
-    if !Path::new(&bak).exists() {
-        fs::copy(exe_path, &bak).map_err(|e| format!("Failed to backup Hub exe: {}", e))?;
+    let bak_path = Path::new(&bak);
+    let stale_bak = bak_path.exists() && !same_installed_version(exe_path, bak_path);
+    if !bak_path.exists() || stale_bak {
+        fs::copy(exe_path, bak_path).map_err(|e| format!("Failed to backup Hub exe: {}", e))?;
     }
-    let mut out = data;
-    out[fuse4_off] = b'0';
-    fs::write(exe_path, &out).map_err(|e| format!("Failed to write Hub exe: {}", e))?;
+    data[fuse4_off] = b'0';
+    fs::write(exe_path, &data).map_err(|e| format!("Failed to write Hub exe: {}", e))?;
     Ok(true)
+}
+
+/// 读取 asar 内 `package.json` 的 Hub 版本（原版 / 补丁重建版都保留该文件）
+fn hub_version_of_asar(asar_path: &Path) -> Option<String> {
+    let data = fs::read(asar_path).ok()?;
+    let reader = asar::AsarReader::new(&data, None).ok()?;
+    for (path, file) in reader.files() {
+        if path.to_string_lossy() == "package.json" {
+            let json: serde_json::Value = serde_json::from_slice(file.data()).ok()?;
+            return json
+                .get("version")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+/// 两个文件是否属于同一版本（用 ProductVersion 的首段比对，"3.22.5" 与 "3.22.5.0" 视为一致）。
+/// 读不出任一侧版本时按"一致"处理，避免误判导致反复重写备份。
+fn same_installed_version(a: &Path, b: &Path) -> bool {
+    let va = crate::scanner::read_file_product_version(a);
+    let vb = crate::scanner::read_file_product_version(b);
+    match (va, vb) {
+        (Some(x), Some(y)) => x.starts_with(&y) || y.starts_with(&x),
+        _ => true,
+    }
+}
+
+/// `app.asar.bak` 是否是"旧版本 Hub"的遗留备份。
+///
+/// 判定依据：备份内 `package.json` 的版本 vs 当前安装 Hub 的版本
+/// （优先取 exe 的 ProductVersion，读不到时退化为当前 asar 内的版本）。
+/// 任一版本读不出时按"非陈旧"处理，避免误删可用的干净基线。
+fn is_stale_hub_backup(bak: &Path, asar: &Path) -> bool {
+    let Some(bak_version) = hub_version_of_asar(bak) else {
+        return false;
+    };
+    let installed = hub_exe_path(asar)
+        .and_then(|exe| crate::scanner::read_file_product_version(&exe))
+        .or_else(|| hub_version_of_asar(asar));
+    let Some(installed) = installed else {
+        return false;
+    };
+    // "3.22.5" 与 "3.22.5.0" 视为同一版本
+    !(installed.starts_with(&bak_version) || bak_version.starts_with(&installed))
 }
 
 /// 在字节切片中查找子序列，返回偏移
@@ -844,6 +966,25 @@ fn patch_license_js(content: &[u8], path: &Path, disable_signin: bool, disable_u
         if let Some(patched) = replace_method_body(&modified, "async isLicenseValid()", "async isLicenseValid() {\n\t\t\t\treturn true; // patched by unifree\n\t\t\t}") {
             modified = patched;
         }
+        // Hub 3.22.0+（HUB-7120）：授权校验从布尔值改成三态 verdict
+        // （ENTITLED / NOT_ENTITLED / UNVERIFIED）。UI 的阻塞点和项目打开门禁
+        // 走 checkEditorEntitlement / checkUlfLicense，不再走 isLicenseValid；
+        // 这两个方法直连 licensing client 的 checkEntitlements/getAllEntitlementGroups，
+        // 不打补丁的话 Hub 会按客户端真实答复显示"没有许可证"。
+        if let Some(patched) = replace_method_body(
+            &modified,
+            "async checkEditorEntitlement()",
+            "async checkEditorEntitlement() {\n\t\t\t\treturn \"ENTITLED\"; // patched by unifree\n\t\t\t}",
+        ) {
+            modified = patched;
+        }
+        if let Some(patched) = replace_method_body(
+            &modified,
+            "async checkUlfLicense()",
+            "async checkUlfLicense() {\n\t\t\t\treturn \"ENTITLED\"; // patched by unifree\n\t\t\t}",
+        ) {
+            modified = patched;
+        }
     }
 
     // licenseService.isLicenseValid → 始终返回 true
@@ -856,15 +997,16 @@ fn patch_license_js(content: &[u8], path: &Path, disable_signin: bool, disable_u
         }
     }
 
-    // DefaultLocalConfig 配置
-    if file_name.starts_with("DefaultLocalConfig") {
-        if disable_signin {
-            // 只设置 DisableSignInRequired（登录非必须），不设置 DisableSignIn（保留登录 UI）
-            modified = modified.replace("DisableSignInRequired]: false,", "DisableSignInRequired]: true,");
-        }
-        if disable_update {
-            modified = modified.replace("DisableAutoUpdate]: false,", "DisableAutoUpdate]: true,");
-        }
+    // DefaultLocalConfig 默认值（强制登录 / 自动更新）
+    //
+    // 不按文件名过滤：Hub 3.22 起除了 `DefaultLocalConfig-*.js`，`installerContainerSetup-*.js`
+    // 里还有一份独立的 DefaultLocalConfig 副本（编辑器安装/下载容器的窗口用它决定要不要登录）。
+    // 只改 `DefaultLocalConfig-*.js` 会在"从 Hub 装编辑器"时重新要求登录。
+    if disable_signin {
+        modified = modified.replace("DisableSignInRequired]: false,", "DisableSignInRequired]: true,");
+    }
+    if disable_update {
+        modified = modified.replace("DisableAutoUpdate]: false,", "DisableAutoUpdate]: true,");
     }
 
     modified
