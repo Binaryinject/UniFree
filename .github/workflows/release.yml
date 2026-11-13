@@ -49,8 +49,10 @@ jobs:
           prerelease: false
 
   build-macos:
-    # 仅 Apple Silicon（arm64 / M 系列）。macos-14 运行器即 arm64。
-    runs-on: macos-14
+    # 仅 Apple Silicon（arm64 / M 系列）产物：在 Intel runner 上交叉编译 aarch64。
+    # 说明：本仓库（public + free plan）不支持 macos-14 的 arm64 托管 runner，
+    # 会报 "configuration 'macos-14-arm64-us-default' is not supported"，故使用 macos-13 + --target aarch64-apple-darwin。
+    runs-on: macos-13
     needs: build
     steps:
       - name: Checkout
