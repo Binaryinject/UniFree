@@ -47,6 +47,10 @@ pub fn backup_path(path: &Path) -> PathBuf {
 const MACOS_AOT_VALIDATE_SIG_ANCHOR: &str =
     "f6 57 bd a9 f4 4f 01 a9 fd 7b 02 a9 fd 83 00 91 f3 03 01 aa 73 03 00 b4";
 
+/// 补丁只覆盖锚点前 8 字节，尾部 16 字节仍在，用于判断"已补丁"状态（原文件中唯一）。
+const MACOS_AOT_VALIDATE_SIG_TAIL: &str =
+    "fd 7b 02 a9 fd 83 00 91 f3 03 01 aa 73 03 00 b4";
+
 /// ValidateSignature 包装函数的字节锚点（用于检测 Native AOT exe 是否已补丁）
 const VALIDATE_SIG_PATTERN: &str = "57 56 53 48 83 EC 20 48 8B DA 48 85 DB 74 ?? 48 8B 71 10 40 0F B6 79 18 48 8D 15 ?? ?? ?? ?? 48 39 11 74 ?? 48 8D 15 ?? ?? ?? ?? 48 39 11 75 ?? 48 8B D3";
 
@@ -87,13 +91,16 @@ pub fn get_editor_dll_status(dll_path: &str) -> String {
         return "unknown".into();
     };
 
-    // macOS AOT client：锚点命中且头部已是 mov w0,#1; ret 即视为已补丁
+    // macOS AOT client：补丁只改入口前 8 字节，尾部 16 字节锚点仍在，
+    // 用「尾部锚点位置前 8 字节是否为 mov w0,#1; ret」判断状态。
     #[cfg(target_os = "macos")]
     {
         if file_name == "Unity.Licensing.Client" {
-            if let Some(off) = find_pattern(&data, MACOS_AOT_VALIDATE_SIG_ANCHOR) {
+            if let Some(off) = find_pattern(&data, MACOS_AOT_VALIDATE_SIG_TAIL) {
                 let o = off as usize;
-                if data.get(o..o + 8) == Some(&[0x20, 0x00, 0x80, 0x52, 0xC0, 0x03, 0x5F, 0xD6][..]) {
+                if o >= 8
+                    && data.get(o - 8..o) == Some(&[0x20, 0x00, 0x80, 0x52, 0xC0, 0x03, 0x5F, 0xD6][..])
+                {
                     return "patched".into();
                 }
             }
@@ -810,6 +817,7 @@ pub fn restore_macos_editor(editor: &Path) -> Result<(), String> {
         return Ok(());
     }
     fs::copy(&bak, editor).map_err(|e| format!("Failed to restore editor: {}", e))?;
+    let _ = fs::remove_file(&bak);
     Ok(())
 }
 
@@ -850,6 +858,8 @@ pub fn restore_macos_aot_client(client_path: &str) -> Result<String, String> {
         return Err("Backup not found".into());
     }
     fs::copy(&bak, path).map_err(|e| format!("Failed to restore client: {}", e))?;
+    // 删除备份：否则 get_editor_dll_status 里 "存在 .bak 即视为已补丁" 的判断会让 UI 一直显示已补丁
+    let _ = fs::remove_file(&bak);
     Ok("Restored macOS AOT client".into())
 }
 
