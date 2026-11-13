@@ -91,9 +91,10 @@ Scope of the current macOS support: **Unity 6 editors with a managed licensing c
 (6000.0 – 6000.3.27 and other builds that still ship `Unity.Licensing.EntitlementResolver.dll`)
 and Unity Hub.
 Older editors (2019–2022) rely on Windows DLL replacement and are not covered on macOS yet.
-Newer builds (e.g. 6000.3.28+, 6000.7+) ship a **Native AOT** licensing client — a single arm64
-Mach-O with no managed DLLs. That variant needs its own native arm64 anchor and is not
-implemented yet; the UI reports it as unsupported instead of patching.
+Newer builds (e.g. 6000.3.28+) ship a **Native AOT** licensing client — a single arm64 Mach-O with
+no managed DLLs. Those are patched too: the `ValidateSignature` equivalent is short-circuited with
+`mov w0,#1; ret`, and the editor's client code-signature check is bypassed (`cmp w0,#9; b.ne` → `nop`),
+then the whole `Unity.app` is re-signed ad-hoc.
 
 What the macOS patch does:
 

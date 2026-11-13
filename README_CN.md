@@ -88,9 +88,9 @@ macOS 版本**只支持 Apple Silicon（M 系列 / arm64）**，Intel Mac 不在
 当前 macOS 覆盖范围：**使用托管 licensing client 的 Unity 6 编辑器**
 （6000.0 – 6000.3.27，即目录里仍有 `Unity.Licensing.EntitlementResolver.dll` 的版本）与 Unity Hub。
 2019–2022 依赖 Windows 侧的 DLL 替换，macOS 暂不覆盖。
-更新的版本（如 6000.3.28+、6000.7+）改用 **Native AOT** client——单个 arm64 Mach-O、
-不再有托管 DLL，需要独立的 arm64 原生锚点，目前尚未实现；界面会明确提示不支持，
-而不是写入无效补丁。
+更新的版本（如 6000.3.28+）改用 **Native AOT** client——单个 arm64 Mach-O、不再有托管 DLL：
+这类版本同样支持，直接短路 `ValidateSignature` 等价函数（`mov w0,#1; ret`），并绕开编辑器侧的
+client 代码签名校验（`cmp w0,#9; b.ne` → `nop`），最后对整个 `Unity.app` 做 ad-hoc 重签。
 
 macOS 补丁做了什么：
 

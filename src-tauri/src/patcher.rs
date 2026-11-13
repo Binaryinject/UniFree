@@ -39,6 +39,14 @@ pub fn backup_path(path: &Path) -> PathBuf {
 }
 
 
+
+/// macOS Unity 6000.3.28f1（AOT client）：`ValidateSignature` 等价函数的入口锚点（24 字节，全文件唯一）。
+/// 该函数由 `XmlReader<T>.Read + 0xd8` 调用，命中后把入口改成 `mov w0,#1; ret` 即可让 ULF /
+/// entitlement XML 的签名校验直接通过（实测日志从 “digital signature is invalid” 变为
+/// “Successfully parsed (ULF) license”，编辑器退出码 198 → 0，License group: Unity Pro）。
+const MACOS_AOT_VALIDATE_SIG_ANCHOR: &str =
+    "f6 57 bd a9 f4 4f 01 a9 fd 7b 02 a9 fd 83 00 91 f3 03 01 aa 73 03 00 b4";
+
 /// ValidateSignature 包装函数的字节锚点（用于检测 Native AOT exe 是否已补丁）
 const VALIDATE_SIG_PATTERN: &str = "57 56 53 48 83 EC 20 48 8B DA 48 85 DB 74 ?? 48 8B 71 10 40 0F B6 79 18 48 8D 15 ?? ?? ?? ?? 48 39 11 74 ?? 48 8D 15 ?? ?? ?? ?? 48 39 11 75 ?? 48 8B D3";
 
@@ -78,6 +86,20 @@ pub fn get_editor_dll_status(dll_path: &str) -> String {
     let Ok(data) = fs::read(path) else {
         return "unknown".into();
     };
+
+    // macOS AOT client：锚点命中且头部已是 mov w0,#1; ret 即视为已补丁
+    #[cfg(target_os = "macos")]
+    {
+        if file_name == "Unity.Licensing.Client" {
+            if let Some(off) = find_pattern(&data, MACOS_AOT_VALIDATE_SIG_ANCHOR) {
+                let o = off as usize;
+                if data.get(o..o + 8) == Some(&[0x20, 0x00, 0x80, 0x52, 0xC0, 0x03, 0x5F, 0xD6][..]) {
+                    return "patched".into();
+                }
+            }
+            return "original".into();
+        }
+    }
 
     // macOS：launcher shim 存在说明已执行过补丁（R2R 关闭 + IL 已改）
     #[cfg(target_os = "macos")]
@@ -225,13 +247,24 @@ pub fn patch_entitlement_resolver(dll_path: &str, display_version: Option<&str>)
         }
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
         if file_name == "Unity.Licensing.Client" {
-            // Unity 6000.3.28+ / 6000.7+ 的 macOS licensing client 是 Native AOT（arm64 Mach-O，
-            // 目录里没有托管 DLL），无法走 IL 补丁，需要独立的 arm64 原生锚点。
-            return Err(
-                "macOS: this editor ships a Native AOT licensing client (no managed DLLs) \
-                 - native arm64 patch not implemented yet; managed clients (e.g. 6000.3.21-27) are supported"
-                    .into(),
-            );
+            // Unity 6000.3.28+ 的 macOS licensing client 是 Native AOT（arm64 Mach-O，无托管 DLL）：
+            // 打 ValidateSignature 入口 + 编辑器侧 client 代码签名校验。
+            let client_msg = patch_macos_aot_client(dll_path)?;
+            let editor = path
+                .parent()          // MacOS
+                .and_then(|p| p.parent())  // Contents
+                .and_then(|p| p.parent())  // UnityLicensingClient.app
+                .and_then(|p| p.parent())  // Helpers
+                .and_then(|p| p.parent())  // Contents
+                .and_then(|p| p.parent())  // Unity.app
+                .map(|app| app.join("Contents").join("MacOS").join("Unity"))
+                .ok_or("Cannot derive Unity editor path from licensing client path")?;
+            let ed_msg = patch_macos_editor_client_signature_check(&editor)?;
+            // 两处都改完后统一 ad-hoc 重签一次（分步重签会留下不一致的封印）
+            let app = editor.parent().and_then(|p| p.parent()).and_then(|p| p.parent())
+                .ok_or("Cannot derive Unity.app path")?;
+            resign_app_bundle(app, "Unity.app")?;
+            return Ok(format!("{}; {}; Unity.app re-signed", client_msg, ed_msg));
         }
         if file_name != "Unity.Licensing.EntitlementResolver.dll" {
             return Err(format!("Unsupported Unity licensing target on macOS: {}", file_name));
@@ -435,6 +468,20 @@ pub fn patch_unity_exe_validate_server_process(exe_path: &str) -> Result<String,
 
 /// Restore DLL from backup
 pub fn restore(dll_path: &str) -> Result<String, String> {
+    // macOS AOT client：必须在通用 .bak 逻辑之前处理（通用逻辑会消费掉备份）
+    #[cfg(target_os = "macos")]
+    {
+        if Path::new(dll_path).file_name().and_then(|n| n.to_str()) == Some("Unity.Licensing.Client") {
+            let msg = restore_macos_aot_client(dll_path)?;
+            if let Some(editor) = editor_exe_from_client(dll_path) {
+                let _ = restore_macos_editor(&editor);
+                if let Some(app) = editor.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
+                    resign_app_bundle(app, "Unity.app")?;
+                }
+            }
+            return Ok(format!("{}; editor restored; Unity.app re-signed", msg));
+        }
+    }
     let bak_path = backup_path(Path::new(dll_path));
     let bak = Path::new(&bak_path);
     if !bak.exists() {
@@ -741,6 +788,201 @@ pub fn remove_r2r_env_shim(client_dir: &Path) {
         let _ = fs::remove_file(&shim);
         let _ = fs::rename(&real, &shim);
     }
+}
+
+
+
+/// 从 `.../Unity.app/Contents/Helpers/UnityLicensingClient.app/Contents/MacOS/Unity.Licensing.Client`
+/// 推出 `.../Unity.app/Contents/MacOS/Unity`。
+#[cfg(target_os = "macos")]
+fn editor_exe_from_client(client_path: &str) -> Option<PathBuf> {
+    let p = Path::new(client_path);
+    let app = p.parent()?.parent()?.parent()?.parent()?.parent()?.parent()?;
+    let editor = app.join("Contents").join("MacOS").join("Unity");
+    editor.exists().then_some(editor)
+}
+
+/// 恢复编辑器二进制（从包外备份）并重签 Unity.app。
+#[cfg(target_os = "macos")]
+pub fn restore_macos_editor(editor: &Path) -> Result<(), String> {
+    let bak = backup_path(editor);
+    if !bak.exists() {
+        return Ok(());
+    }
+    fs::copy(&bak, editor).map_err(|e| format!("Failed to restore editor: {}", e))?;
+    Ok(())
+}
+
+/// macOS AOT client 补丁：把 `ValidateSignature` 等价函数入口改成 `mov w0,#1; ret`。
+/// 命中锚点后同时改入口 8 字节；幂等（已是补丁形态则直接返回）。
+#[cfg(target_os = "macos")]
+pub fn patch_macos_aot_client(client_path: &str) -> Result<String, String> {
+    let path = Path::new(client_path);
+    if !path.exists() {
+        return Err("Unity.Licensing.Client not found".into());
+    }
+    let bak = backup_path(path);
+    if !bak.exists() {
+        fs::copy(path, &bak).map_err(|e| format!("Failed to backup client: {}", e))?;
+    }
+    fs::copy(&bak, path).map_err(|e| format!("Failed to restore client from backup: {}", e))?;
+
+    let data = fs::read(path).map_err(|e| format!("Failed to read client: {}", e))?;
+    let off = find_pattern(&data, MACOS_AOT_VALIDATE_SIG_ANCHOR)
+        .ok_or("macOS AOT client: ValidateSignature anchor not found (unsupported build)")? as usize;
+    let patched_head = [0xB8u8, 0x01, 0x00, 0x00, 0x00, 0xC3]; // x86 形态，仅占位
+    let _ = patched_head;
+
+    let mut out = data.clone();
+    // ARM64: mov w0,#1 ; ret
+    out[off..off + 8].copy_from_slice(&[0x20, 0x00, 0x80, 0x52, 0xC0, 0x03, 0x5F, 0xD6]);
+    fs::write(path, &out).map_err(|e| format!("Failed to write patched client: {}", e))?;
+
+    Ok("macOS AOT client: ValidateSignature bypassed (mov w0,#1; ret)".into())
+}
+
+/// 撤销 macOS AOT client 补丁（从包外备份恢复并重签）。
+#[cfg(target_os = "macos")]
+pub fn restore_macos_aot_client(client_path: &str) -> Result<String, String> {
+    let path = Path::new(client_path);
+    let bak = backup_path(path);
+    if !bak.exists() {
+        return Err("Backup not found".into());
+    }
+    fs::copy(&bak, path).map_err(|e| format!("Failed to restore client: {}", e))?;
+    Ok("Restored macOS AOT client".into())
+}
+
+/// 编辑器侧：把 “Clients 代码签名校验” 的成功判定改成恒真。
+///
+/// 定位方式（跨小版本）：ASCII 格式串
+/// `Code {0} while verifying Licensing Client signature (process Id: {1}, path: "{2}")`
+/// → 从 Mach-O 段表换算 VA → 扫 `adrp/add` 找到引用点 →
+/// 其后找 `cmp w0,#9`（成功码 9）后的 `b.ne`，改成 NOP。
+#[cfg(target_os = "macos")]
+pub fn patch_macos_editor_client_signature_check(editor_exe: &Path) -> Result<String, String> {
+    if !editor_exe.exists() {
+        return Err("Unity editor executable not found".into());
+    }
+    let bak = backup_path(editor_exe);
+    if !bak.exists() {
+        fs::copy(editor_exe, &bak).map_err(|e| format!("Failed to backup editor: {}", e))?;
+    }
+    fs::copy(&bak, editor_exe).map_err(|e| format!("Failed to restore editor from backup: {}", e))?;
+
+    let data = fs::read(editor_exe).map_err(|e| format!("Failed to read editor: {}", e))?;
+    let needle = b"Code {0} while verifying Licensing Client signature";
+    let s_off = find_bytes(&data, needle).ok_or("editor: signature-check format string not found")?;
+    let va = macho_fileoff_to_va(&data, s_off as u64)
+        .ok_or("editor: cannot map format string offset to VA")?;
+
+    let mut out = data.clone();
+    let text_va = macho_segment_va(&data, "__TEXT").ok_or("editor: __TEXT segment not found")?;
+    let text_size = macho_segment_filesize(&data, "__TEXT").ok_or("editor: __TEXT size not found")?;
+    let text_off = 0usize;
+
+    let mut patched = 0usize;
+    let mut i = text_off;
+    while i + 8 <= text_off + text_size as usize {
+        let w = u32::from_le_bytes([out[i], out[i + 1], out[i + 2], out[i + 3]]);
+        // ADRP
+        if (w & 0x9F00_0000) == 0x9000_0000 {
+            let rd = w & 0x1f;
+            let immlo = (w >> 29) & 3;
+            let immhi = (w >> 5) & 0x7ffff;
+            let mut imm = ((immhi << 2) | immlo) as i64;
+            if imm & 0x10_0000 != 0 { imm -= 0x20_0000; }
+            let pc = text_va.wrapping_add(i as u64);
+            let page = (pc & !0xfff) as i64 + (imm << 12);
+            // 紧随其后的 ADD rd, rd, #imm12
+            for k in 1..=3usize {
+                let w2 = u32::from_le_bytes([out[i+4*k], out[i+4*k+1], out[i+4*k+2], out[i+4*k+3]]);
+                if (w2 & 0xFF80_0000) == 0x9100_0000 && ((w2 >> 5) & 0x1f) == rd {
+                    let imm12 = ((w2 >> 10) & 0xfff) as u64;
+                    let sh = (w2 >> 22) & 1;
+                    let addr = page.wrapping_add((imm12 << (12 * sh)) as i64);
+                    if addr as u64 == va {
+                        // 从这里向后找 cmp w0,#9; b.ne
+                        // 判定在格式串引用点之前（cmp/b.ne 紧邻成功分支）
+                        let mut j = i.saturating_sub(0x100);
+                        let end = (i + 0x40).min(text_off + text_size as usize - 8);
+                        while j < end {
+                            let x = u32::from_le_bytes([out[j], out[j+1], out[j+2], out[j+3]]);
+                            if x == 0x7100_241F { // cmp w0, #9
+                                let bn = u32::from_le_bytes([out[j+4], out[j+5], out[j+6], out[j+7]]);
+                                if (bn & 0xFF00_001F) == 0x5400_0001 { // b.ne
+                                    out[j+4..j+8].copy_from_slice(&0xD503_201Fu32.to_le_bytes());
+                                    patched += 1;
+                                }
+                            }
+                            j += 4;
+                        }
+                    }
+                    break;
+                }
+                if (w2 & 0xFFC0_0000) == 0x9100_0000 { break; }
+            }
+        }
+        i += 4;
+    }
+
+    if patched == 0 {
+        return Ok("editor: signature-check pattern not found (already NOP or unsupported build)".into());
+    }
+    fs::write(editor_exe, &out).map_err(|e| format!("Failed to write patched editor: {}", e))?;
+
+    Ok(format!("editor: client signature check bypassed ({} b.ne -> nop)", patched))
+}
+
+/// 最小 Mach-O 解析：file offset → VA（遍历 LC_SEGMENT_64）。
+#[cfg(target_os = "macos")]
+fn macho_fileoff_to_va(data: &[u8], off: u64) -> Option<u64> {
+    let ncmds = u32::from_le_bytes(data.get(16..20)?.try_into().ok()?) as usize;
+    let mut p = 32usize;
+    for _ in 0..ncmds {
+        let cmd = u32::from_le_bytes(data.get(p..p+4)?.try_into().ok()?);
+        let cmdsize = u32::from_le_bytes(data.get(p+4..p+8)?.try_into().ok()?) as usize;
+        if cmd == 0x19 {
+            let vmaddr = u64::from_le_bytes(data.get(p+24..p+32)?.try_into().ok()?);
+            let fileoff = u64::from_le_bytes(data.get(p+40..p+48)?.try_into().ok()?);
+            let filesize = u64::from_le_bytes(data.get(p+48..p+56)?.try_into().ok()?);
+            if off >= fileoff && off < fileoff + filesize {
+                return Some(vmaddr + (off - fileoff));
+            }
+        }
+        p += cmdsize;
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn macho_segment_va(data: &[u8], name: &str) -> Option<u64> {
+    macho_segment_field(data, name, 24)
+}
+
+#[cfg(target_os = "macos")]
+fn macho_segment_filesize(data: &[u8], name: &str) -> Option<u64> {
+    macho_segment_field(data, name, 48)
+}
+
+#[cfg(target_os = "macos")]
+fn macho_segment_field(data: &[u8], name: &str, field: usize) -> Option<u64> {
+    let ncmds = u32::from_le_bytes(data.get(16..20)?.try_into().ok()?) as usize;
+    let mut p = 32usize;
+    for _ in 0..ncmds {
+        let cmd = u32::from_le_bytes(data.get(p..p+4)?.try_into().ok()?);
+        let cmdsize = u32::from_le_bytes(data.get(p+4..p+8)?.try_into().ok()?) as usize;
+        if cmd == 0x19 {
+            let segname = &data[p+8..p+24];
+            let segname = segname.split(|b| *b == 0).next().unwrap_or(&[]);
+            if segname == name.as_bytes() {
+                let v = u64::from_le_bytes(data.get(p+field..p+field+8)?.try_into().ok()?);
+                return Some(v);
+            }
+        }
+        p += cmdsize;
+    }
+    None
 }
 
 /// macOS：补丁编辑器内置 licensing client 的 DLL 后，重签它所在的
