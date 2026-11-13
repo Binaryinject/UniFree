@@ -111,7 +111,46 @@ __attribute__((used)) static const interpose_t interposers[]
 - 托管字符串字面量（含 `The digital signature is invalid.`）**没有** `adrp/add` 直接引用，
   是启动期由运行时从字符串 blob 水合出来的，代码只引用水合后的槽位。
 
-### 下一步（已验证路径）
+### 调用图求解（本轮新增，工具已跑通）
+
+用运行时内存快照把间接调用解析成直接调用，再按 traceback 的三个已知偏移做三层链匹配：
+
+1. `dump.dylib`：启动后 5s 用 `mach_vm_region` + `mach_vm_read_overwrite` 把主镜像
+   `[0x100000000, 0x100000000+0x1b00000)` 整段转储到 `/tmp/dump.bin`（27MB，含 `__DATA` 的
+   水合结果），并记录 slide；
+2. `chain.py`：线性反编译 `__managedcode`（10.3MB），跟踪 `adrp/add/ldr` 的寄存器常量，
+   遇到 `ldr xD,[已知页]` 时从 dump 里取该槽位的真实指针（减 slide 得 VA），
+   从而把 `blr` 也解析成目标；得到 251,795 个调用点、228,351 个可解析目标；
+3. 反向索引后按 `Read + 0xd8`、`Parse + 0xbc`、`Map + 0x12c` 三层链搜索。
+
+结果收敛到唯一一组 `Map 0x100122f3c…`、`Parse 0x1001548c0`、`Read 0x100153f10`、
+候选 `V = 0x100159f10`（`Read+0xdc` 返回地址正好对上 traceback 的 `Read + 0xdc`）。
+
+**但这个候选不是 ValidateSignature**，已用两种方式反证：
+
+- 把 `0x159f10` 改成 `brk #1`：客户端在**打印 `Starting IPC server` 之前**就 trap（exit 133），
+  说明它位于启动早期路径，不是 ULF 解析那一段；
+- 改成 `mov w0,#1; ret`：客户端启动即 `System.Console.EnsureInitialized` NRE（写 stderr 失败）；
+  改成 `mov w0,#0; ret`：启动正常，但日志仍是 `The digital signature is invalid.`。
+
+结论：traceback 里的 `+ 0xdc` 属于**泛型实例化后的一份 `XmlReader<T>.Read`**，
+和静态匹配到的那份不是同一份代码；同一套调用形状在多个实例化里重复，偏移会撞车。
+另外 `0x159f10` 的入口形态（`ldr x1,[x19]; ldr x1,[x1,#0x40]; blr x1; cbz w1` 后接固定数据
+`0x10142bcc0` 抛错）是典型的“虚拟调用 + 判空抛错”包装，不是 XML 验签本体。
+
+### 下一步（已收敛）
+
+优先级 1：**从运行时异常对象里取 IP**。客户端抛异常时会捕获托管栈（所以日志能打印方法名+偏移），
+在 `write` 命中 `digital signature` 的那次停下，从当前线程栈上找到 `InvalidDataException` 实例，
+读它内部的 stack-trace 数组即可直接得到 `ValidateSignature + 0x590` 的绝对地址 —— 这是唯一不需要
+再猜实例化的路径。
+
+优先级 2：编辑器侧 entitlement 门禁。已定位 `com.unity.editor.ui`（`0x10447e5b7`）、
+`com.unity.editor.headless`（`0x10447e5cb`）、`No valid Unity Editor license found`（`0x10465725d`）
+及其 xref（`0x100800260/0x10080027c`、`0x103297818`），这些是编辑器侧构建 entitlement 名称表的位置；
+顺着表的使用点可找到“拿不到 entitlement 就退出 198”的判定分支。
+
+### 早期推测（保留）
 
 1. 用 `__modules` → TypeManager 的 `ReflectionMethodInfo`（名字 `ValidateSignature`，文件 0xb6fb2d 附近）
    找到对应 MethodDesc；Native AOT 的 MethodDesc 保存到原生代码的相对偏移，可直接算出入口 VA；
