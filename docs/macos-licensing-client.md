@@ -190,6 +190,14 @@ __attribute__((used)) static const interpose_t interposers[]
 2. 或者断在 `SecKeyVerifySignature` 的调用点 `0x100032e28`（ULF 解析确实会走到，stderr 有 seckey 记录），
    取 `lr` 的托管返回地址，向上回溯到调用它的托管方法，再用该地址减 0x590 得到方法起点。
 
+### 另一个反证：SecKeyVerifySignature 不走静态存根
+
+恢复原版客户端后，用 lldb 在 `0x100a83e40`（`otool -Iv` 标为 `_SecKeyVerifySignature` 的 `__stubs` 条目）
+和原生 helper 里的两个 `bl` 点（`0x100032e28 / 0x100032ecc`）下断点，运行时 stderr 明确打出
+`SecKeyVerifySignature failed: ...`，但这三个地址**一个都没命中**。
+说明验签调用不是走静态 stub/`bl`（很可能是 `dlsym`/函数指针间接触发），
+因此"改存根让验签恒真"这条捷径不成立，真正的门禁仍只能落在 `ValidateSignature` 本体上。
+
 ### 下一步（已收敛）
 
 优先级 1：**从运行时异常对象里取 IP**。客户端抛异常时会捕获托管栈（所以日志能打印方法名+偏移），
