@@ -47,7 +47,49 @@ shell shim）都会在这一步被拒：
 
 所以 **client 必须由对应版本自己提供**，AOT 版本就得在 AOT 二进制上打补丁。
 
-## AOT client 侧（6000.3.28+）现状
+## AOT client 侧（6000.3.28+）：已拿到托管栈回溯
+
+AOT 客户端**保留了托管方法名的栈回溯**（Native AOT 的 stack trace 支持），触发方式就是让编辑器连接它并请求
+entitlement，日志里会打印完整调用链：
+
+```
+System.IO.InvalidDataException: The digital signature is invalid.
+   at Unity.Licensing.EntitlementResolver.Xml.XmlExtensions.ValidateSignature(XmlDocument, X509Certificate2, Boolean, String) + 0x590
+   at Unity.Licensing.EntitlementResolver.Xml.XmlReader`1.Read(Stream, Boolean, Boolean) + 0xdc
+   at Unity.Licensing.EntitlementResolver.Ulf.UlfLicense.Parse(String, X509Certificate2) + 0xc0
+   at Unity.Licensing.Client.Services.Helpers.LicenseFilesMapper.MapLicenseFilesToResult(IEnumerable`1, Boolean) + 0x130
+```
+
+这条链路给出了三个可直接利用的事实：
+
+1. 目标函数就是 `XmlExtensions.ValidateSignature`，且**抛出点在方法内 +0x590**；
+2. 调用点偏移：`Read + 0xdc` 调它、`Parse + 0xc0` 调 `Read`、`MapLicenseFilesToResult + 0x130` 调 `Parse`；
+3. 方法名 `ValidateSignature` 在二进制里以 ASCII 出现在元数据区（文件 0xb6fb2d），可用于后续反查 MethodDesc。
+
+### 已排除：按 call-site 直接定位
+
+用 DYLD 拦截 `read` 抓到了 ULF 读取时的真实调用栈（需用 `__DATA,__interpose` 方式，且多数调用是
+`blr` 间接调用），但栈帧返回地址前一条指令**多数不是 `bl` 而是 `blr`**，因此无法直接从 `Read+0xd8`
+读出 `ValidateSignature` 的入口——必须走方法表反查或运行时观察。
+
+### 可用的运行时观察手段（已验证可用）
+
+- DYLD interpose（`__DATA,__interpose` 段）在该客户端上有效：替换 `read` 能拿到 604 字节 ULF 读取栈；
+  直接重定义符号无效，必须用 interpose 段。
+- `_dyld_get_image_vmaddr_slide` 取主镜像 slide（例：0x3bc000），VA = 运行时地址 − slide，
+  文件偏移 = VA − 0x100000000（`__TEXT` fileoff=0）。
+- 抓取方法：先带 dylib 起 client（它会建 `/tmp/Unity-LicenseClient-<user>.sock`），再跑一次
+  `Unity -batchmode -quit -createProject ...` 让编辑器连上它并触发 ULF 解析；客户端日志里就会出现上面的托管栈。
+
+### 下一步（已验证路径）
+
+1. 用 `__modules` → TypeManager 的 `ReflectionMethodInfo`（名字 `ValidateSignature`，文件 0xb6fb2d 附近）
+   找到对应 MethodDesc；Native AOT 的 MethodDesc 保存到原生代码的相对偏移，可直接算出入口 VA；
+2. 入口打 `mov w0,#1; ret`（`0x52800020 0xd65f03c0`）或 `ret`（`0xd65f03c0`）；
+3. 用同一条 `-createProject` 流程验证：日志应从 `The digital signature is invalid.` 变成
+   `Successfully parsed (ULF) license`。
+
+## AOT client 侧（6000.3.28+）早期记录
 
 `Unity.app/Contents/Helpers/UnityLicensingClient.app/Contents/MacOS/` 下只有一个 arm64 Mach-O
 （Native AOT，无托管 DLL），`.text/__managedcode` + `__modules` + `.dotnet_eh_table` 结构。
