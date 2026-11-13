@@ -111,6 +111,13 @@ macOS 补丁做了什么：
 - 重签是 ad-hoc（`codesign -`），不需要 Apple 开发者证书；补丁后会自动清除 quarantine 标记。
 - 所有改动都有 `*.bak` 备份，可在应用内还原。
 
+## 发布
+
+- CI（`.github/workflows/release.yml`）只构建 **Windows** 安装包并发布 GitHub Release；
+- **macOS arm64 DMG 在 Apple Silicon 机器上本地构建**（`cargo tauri build`）后上传到同一个 release。
+  本仓库账号不支持 GitHub 托管的 arm64 runner（报 `configuration 'macos-14-arm64-us-default' is not supported`），
+  所以 mac 构建不进 CI。
+
 ## 从源码构建
 
 ### 前置要求

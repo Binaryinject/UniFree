@@ -48,54 +48,9 @@ jobs:
           releaseDraft: false
           prerelease: false
 
-  build-macos:
-    # 仅 Apple Silicon（arm64 / M 系列）产物：在 Intel runner 上交叉编译 aarch64。
-    # 说明：本仓库（public + free plan）不支持 macos-14 的 arm64 托管 runner，
-    # 会报 "configuration 'macos-14-arm64-us-default' is not supported"，故使用 macos-13 + --target aarch64-apple-darwin。
-    runs-on: macos-13
-    needs: build
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build frontend
-        run: npm run build
-
-      - name: Build Tauri app (arm64 DMG)
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: UniFree ${{ github.ref_name }}
-          releaseBody: ""
-          releaseDraft: false
-          prerelease: false
-          args: --target aarch64-apple-darwin
-
   release-notes:
     runs-on: ubuntu-latest
-    needs: [build, build-macos]
+    needs: build
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -116,10 +71,11 @@ jobs:
           echo "$CHANGES" >> changes.md
           echo "" >> changes.md
           echo "### Downloads" >> changes.md
-          echo "- **UniFree-installer.exe** - Windows (NSIS installer)" >> changes.md
-          echo "- **UniFree_*_aarch64.dmg** - macOS (Apple Silicon / arm64 only)" >> changes.md
+          echo "- **UniFree_x64-setup.exe** - Windows (NSIS installer)" >> changes.md
+          echo "- **UniFree_*_aarch64.dmg** - macOS (Apple Silicon / arm64 only, uploaded separately from an Apple Silicon machine)" >> changes.md
           echo "" >> changes.md
-          echo "> macOS builds target Apple Silicon (M-series) only. Intel Macs are not supported." >> changes.md
+          echo "> macOS DMG is built natively on Apple Silicon and uploaded to the release manually:" >> changes.md
+          echo "> \`cargo tauri build\` then upload \`UniFree_<version>_aarch64.dmg\`. GitHub-hosted arm64 runners are not available for this account." >> changes.md
 
       - name: Update release body
         uses: softprops/action-gh-release@v2

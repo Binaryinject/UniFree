@@ -116,6 +116,13 @@ Notes:
   prompt on first launch of a patched Hub; `xattr -dr com.apple.quarantine` is applied automatically.
 - Everything is backed up (`*.bak`) and can be reverted from the app.
 
+## Release
+
+- CI (`.github/workflows/release.yml`) builds the **Windows** installer and publishes the GitHub release.
+- The **macOS arm64 DMG is built natively on Apple Silicon** (`cargo tauri build`) and uploaded to the same
+  release. GitHub-hosted arm64 runners are not available for this repository's account
+  (`configuration 'macos-14-arm64-us-default' is not supported`), so the mac job is not part of CI.
+
 ## Build from Source
 
 ### Prerequisites
