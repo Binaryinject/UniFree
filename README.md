@@ -1,4 +1,4 @@
-# UniFree 2.8.3
+# UniFree 2.9.4
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -17,7 +17,9 @@
 - **Modern GUI** - Built with Tauri 2.0 + React + Material-UI
 - **i18n Support** - Chinese & English
 - **Automatic Backup** - All modifications are reversible
-- **macOS (Apple Silicon)** - Native arm64 build; Unity 6 editor patching via in-place IL patch + ad-hoc re-signing
+- **macOS (Apple Silicon)** - Native arm64 build. Unity 6 editors are patched either with the in-place IL patch
+  (managed licensing clients) or the **Native AOT anchor** (6000.3.28+); the editor's Licensing-Client code-signature
+  check is bypassed and the whole `Unity.app` is re-signed ad-hoc. Covers Unity Hub on macOS too.
 
 ## Quick Start
 
@@ -159,9 +161,41 @@ MIT License - See [LICENSE](LICENSE) for details
 
 ---
 
-**UniFree 2.8.3** - Unity License Freedom Tool
+**UniFree 2.9.4** - Unity License Freedom Tool
 
 ## Changelog
+
+### v2.9.4
+- **macOS release pipeline fixed**: GitHub rejects arm64 hosted runners for this account
+  (`configuration 'macos-14-arm64-us-default' is not supported`). The macOS job now runs on `macos-13` and
+  cross-compiles `aarch64-apple-darwin`, producing the same arm64 DMG.
+
+### v2.9.3
+- **Crisp app icon**: the icon master was only 32×32, so the Dock icon was upscaled and blurry. Rebuilt a
+  1024×1024 master (supersampled) and regenerated the full iconset — `icon.icns` (16…1024), all PNG sizes,
+  Windows `.ico`, and `app-icon.png`.
+
+### v2.9.2
+- **macOS AOT restore status fixed**: restoring left the out-of-bundle backups in place, and the status check
+  treats "backup exists" as *patched*, so the button stayed on "Restore". Backups are now removed on restore,
+  and the AOT patch state is detected from the 16-byte tail anchor instead of the (overwritten) entry anchor.
+
+### v2.9.1
+- **Unity 6000.3.28+ (macOS, Native AOT licensing client) is now patched**:
+  - client: a 24-byte unique anchor at the `ValidateSignature` equivalent is rewritten to `mov w0,#1; ret`,
+    so ULF and entitlement XML signatures are accepted;
+  - editor: the Licensing-Client code-signature check (`Code 8 while verifying Licensing Client signature`)
+    is bypassed by locating the format string → `adrp/add` xref → `cmp w0,#9` / `b.ne` → `nop`;
+  - both patches are followed by a single ad-hoc `codesign --force --deep` of `Unity.app` (stepwise signing
+    left stale seals and `invalid signature`).
+  - Verified on 6000.3.28f1 arm64: exit code 198 → 0, `License group: Product: Unity Pro`,
+    `Successfully parsed (ULF) license`.
+
+### v2.9.0
+- **macOS (Apple Silicon) support**: native arm64 `app`/`dmg` build, macOS Hub patching (asar + Electron fuse in
+  `Electron Framework` + ad-hoc re-sign), managed-client IL patch with `DOTNET_ReadyToRun=0` launcher shim,
+  macOS license generation (`/Library/Application Support/Unity/Unity_lic.ulf`, one admin prompt),
+  backups stored outside the `.app` bundle.
 
 ### v2.8.3
 - **Hub 3.22.x entitlement-verdict gate covered**: Hub 3.22.0 (HUB-7120) replaced the boolean licence check with a

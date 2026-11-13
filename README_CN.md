@@ -1,4 +1,4 @@
-# UniFree 2.8.3
+# UniFree 2.9.4
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -17,7 +17,9 @@
 - **现代化界面** - 基于 Tauri 2.0 + React + Material-UI 构建
 - **多语言支持** - 中文 & 英文
 - **自动备份** - 所有修改均可还原
-- **macOS（Apple Silicon）** - 原生 arm64 构建；Unity 6 编辑器走就地 IL 补丁 + ad-hoc 重签
+- **macOS（Apple Silicon）** - 原生 arm64 构建。Unity 6 编辑器分两条路补：托管 licensing client 走就地 IL 补丁，
+  6000.3.28+ 的 Native AOT client 走原生锚点；同时绕开编辑器侧的 Licensing Client 代码签名校验，并对整个
+  `Unity.app` 做 ad-hoc 重签。macOS 上的 Unity Hub 同样支持。
 
 ## 快速开始
 
@@ -157,6 +159,35 @@ MIT 许可证 - 详见 [LICENSE](LICENSE)
 **UniFree 2.8.3** - Unity 许可证自由工具
 
 ## 更新日志
+
+### v2.9.4
+- **修复 macOS 发布流水线**：本账号不支持 arm64 托管 runner（报
+  `configuration 'macos-14-arm64-us-default' is not supported`），macOS job 改在 `macos-13` 上交叉编译
+  `aarch64-apple-darwin`，产物仍是 arm64 DMG。
+
+### v2.9.3
+- **图标不再模糊**：原图标母版只有 32×32，Dock 放大后发糊。重新生成 1024×1024 母版（超采样），并重出全套
+  `icon.icns`（16…1024）、各尺寸 PNG、Windows `.ico` 与 `app-icon.png`。
+
+### v2.9.2
+- **修复 macOS AOT 还原后状态**：还原时没有删除包外备份，而状态判定把“存在备份”当成“已补丁”，导致按钮一直停在
+  “还原”。现在还原会清理备份，AOT 补丁状态改用 16 字节尾部锚点判定（入口锚点已被补丁覆盖）。
+
+### v2.9.1
+- **支持 Unity 6000.3.28+（macOS，Native AOT licensing client）**：
+  - 客户端：24 字节唯一锚点定位 `ValidateSignature` 等价函数，入口改写为 `mov w0,#1; ret`，
+    ULF 与 entitlement XML 的签名校验同时通过；
+  - 编辑器：定位 `Code {0} while verifying Licensing Client signature` 格式串 → `adrp/add` 引用 →
+    `cmp w0,#9` 后的 `b.ne` 改 `nop`，绕开 client 代码签名校验；
+  - 两处改完统一 `codesign --force --deep` 重签 `Unity.app`（分步重签会留下不一致封印）。
+  - 已在 6000.3.28f1 arm64 实测：退出码 198 → 0，`License group: Product: Unity Pro`，
+    `Successfully parsed (ULF) license`。
+
+### v2.9.0
+- **新增 macOS（Apple Silicon）支持**：原生 arm64 `app`/`dmg`；macOS Hub 补丁（asar + `Electron Framework`
+  里的 fuse + ad-hoc 重签）；托管 client 就地 IL 补丁 + `DOTNET_ReadyToRun=0` 启动器；
+  macOS 许可证生成（`/Library/Application Support/Unity/Unity_lic.ulf`，一次管理员授权）；
+  备份改存 `.app` 包外。
 
 ### v2.8.3
 - **补齐 Hub 3.22.x 的三态授权门禁**：Hub 3.22.0（HUB-7120）把布尔式许可校验换成了三态 verdict
