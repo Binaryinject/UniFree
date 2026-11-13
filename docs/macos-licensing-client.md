@@ -138,6 +138,18 @@ __attribute__((used)) static const interpose_t interposers[]
 另外 `0x159f10` 的入口形态（`ldr x1,[x19]; ldr x1,[x1,#0x40]; blr x1; cbz w1` 后接固定数据
 `0x10142bcc0` 抛错）是典型的“虚拟调用 + 判空抛错”包装，不是 XML 验签本体。
 
+### 动态注入的可用条件（踩坑记录）
+
+`DYLD_INSERT_LIBRARIES` 对这份客户端**不是永远可用**：
+
+- 12:25 / 12:35 两次成功（interpose 抓栈、dump 内存）时，客户端是被 `codesign --deep --sign -`
+  重签过的 ad-hoc 版本；
+- 12:47 从备份还原后再注入，客户端不再加载任何插入库（连只写一个文件的探针 dylib 都不执行），
+  去掉 `com.apple.provenance` 也不生效（该 xattr 受保护，删不掉）。
+
+结论：做动态分析前，必须先把 `UnityLicensingClient.app` 重新 ad-hoc 签名（`codesign --force --deep
+--sign -`），并在同一次实验里完成注入；还原原始二进制后注入会静默失效，容易误判为“函数没被调用”。
+
 ### 下一步（已收敛）
 
 优先级 1：**从运行时异常对象里取 IP**。客户端抛异常时会捕获托管栈（所以日志能打印方法名+偏移），
