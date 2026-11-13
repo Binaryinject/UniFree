@@ -81,6 +81,36 @@ System.IO.InvalidDataException: The digital signature is invalid.
 - 抓取方法：先带 dylib 起 client（它会建 `/tmp/Unity-LicenseClient-<user>.sock`），再跑一次
   `Unity -batchmode -quit -createProject ...` 让编辑器连上它并触发 ULF 解析；客户端日志里就会出现上面的托管栈。
 
+### 动态观测工作台（已可复用）
+
+拦截库（`__DATA,__interpose` 段，直接重定义符号无效）：
+
+```c
+typedef struct { const void *replacement; const void *replacee; } interpose_t;
+__attribute__((used)) static const interpose_t interposers[]
+    __attribute__((section("__DATA,__interpose"))) = {
+        { (const void *)my_read, (const void *)read },
+};
+```
+
+流程：
+
+1. `DYLD_INSERT_LIBRARIES=interpose.dylib ./Unity.Licensing.Client`（客户端会建
+   `/tmp/Unity-LicenseClient-<user>.sock`）；
+2. 跑一次 `Unity -batchmode -quit -createProject …`，编辑器连上这个已被拦截的客户端并发起 entitlement 请求；
+3. 拦截器把 ULF 读取（604 字节）时的 `backtrace()` 写入日志；
+4. `VA = runtime_addr − _dyld_get_image_vmaddr_slide(主镜像)`，`file_off = VA − 0x100000000`。
+
+实测得到的结论：
+
+- 读 ULF 的调用链是 **Stream/FileStream 包装层**（`0x1002d4d40`、`0x1002db140`、`0x10024de00` …），
+  不是 `XmlReader.Read`，所以从这里拿不到 `ValidateSignature` 的调用点；
+- 这些包装层大量使用 **间接调用**：`adrp x11, …; add x11, …; ldr x16, [x11]; blr x16`
+  （槽位在 `0x1013exxx` / `0x1013fxxx` 一带）以及 `ldr x1,[x0,#0x10]; blr x1` 的接口分发，
+  因此「按 `bl` 反查目标」不成立；
+- 托管字符串字面量（含 `The digital signature is invalid.`）**没有** `adrp/add` 直接引用，
+  是启动期由运行时从字符串 blob 水合出来的，代码只引用水合后的槽位。
+
 ### 下一步（已验证路径）
 
 1. 用 `__modules` → TypeManager 的 `ReflectionMethodInfo`（名字 `ValidateSignature`，文件 0xb6fb2d 附近）
