@@ -171,6 +171,25 @@ __attribute__((used)) static const interpose_t interposers[]
    `XmlReader<T>.Read` 更可靠，但按 `+0xf0/+0x6c` 偏移反查仍会撞出上千个误报，
    需要配合“函数大小 / 是否调用 crypto”等额外约束。
 
+### 本轮实测：289 个候选全部落空（含结论修正）
+
+把"`Read + 0xd8` / `ReadAndParseLicense + 0x68` 两个已知调用点"作为约束，并要求调用者起点通过
+函数头启发式（`stp x29,x30,[sp,#-N]!` / `sub sp,sp,#N`，且前一条是 `ret`/填充），得到 127 + 162 个候选。
+用「静态打 `mov w0,#1; ret` → ad-hoc 重签副本 → 独立跑 2s → 检查新增日志」的批处理逐个验证：
+
+- 日志里 `Exception caught while parsing license /Library/.../Unity_lic.ulf` 共出现 232 次，
+  证明绝大多数候选运行时确实走到了 ULF 解析（oracle 有效）；
+- 289 个候选**全部**没有把结果变成 `Successfully parsed (ULF)`；其中 2 个候选（`0x1006e8480`、
+  `0x100293320`）会让客户端直接 abort，说明它们确实在启动路径上，但不是验签函数。
+
+结论：**"调用点 = 方法起点 + (traceback 偏移 - 4)"** 这个假设在这份 AOT 代码里不成立（或函数起点识别
+不准）。下一步必须先从运行时取到 `ValidateSignature` 的绝对地址，而不是继续用偏移反推：
+
+1. lldb 在 `write` 命中 `digital signature` 时停下，从当前线程栈上定位 `InvalidDataException` 实例，
+   读它内部捕获的 stack-trace IP 数组（Native AOT 会为异常保存 IP 列表，才可能打印出方法名+偏移）；
+2. 或者断在 `SecKeyVerifySignature` 的调用点 `0x100032e28`（ULF 解析确实会走到，stderr 有 seckey 记录），
+   取 `lr` 的托管返回地址，向上回溯到调用它的托管方法，再用该地址减 0x590 得到方法起点。
+
 ### 下一步（已收敛）
 
 优先级 1：**从运行时异常对象里取 IP**。客户端抛异常时会捕获托管栈（所以日志能打印方法名+偏移），
