@@ -17,6 +17,7 @@
 - **Modern GUI** - Built with Tauri 2.0 + React + Material-UI
 - **i18n Support** - Chinese & English
 - **Automatic Backup** - All modifications are reversible
+- **macOS (Apple Silicon)** - Native arm64 build; Unity 6 editor patching via in-place IL patch + ad-hoc re-signing
 
 ## Quick Start
 
@@ -82,6 +83,36 @@ For 6000.7+, the binary is .NET 10 Native AOT compiled (no IL). Patches use patt
 | Editor (2020-2022) | `System.Security.Cryptography.Xml.dll` | Replace with pre-patched DLL |
 | License | `C:\ProgramData\Unity\Unity_lic.ulf` | Generate RSA-signed license file |
 
+## macOS (Apple Silicon)
+
+macOS builds target **Apple Silicon (M-series / arm64) only** — Intel Macs are not supported.
+
+Scope of the current macOS support: **Unity 6 editors with a managed licensing client**
+(6000.0 – 6000.3.27 and other builds that still ship `Unity.Licensing.EntitlementResolver.dll`)
+and Unity Hub.
+Older editors (2019–2022) rely on Windows DLL replacement and are not covered on macOS yet.
+Newer builds (e.g. 6000.3.28+, 6000.7+) ship a **Native AOT** licensing client — a single arm64
+Mach-O with no managed DLLs. That variant needs its own native arm64 anchor and is not
+implemented yet; the UI reports it as unsupported instead of patching.
+
+What the macOS patch does:
+
+| Component | File | Action |
+|-----------|------|--------|
+| Hub | `Unity Hub.app/Contents/Resources/app.asar` | In-place asar rewrite (same JS patches as Windows) |
+| Hub | `Contents/Frameworks/Electron Framework.framework/Electron Framework` | Flip `EnableEmbeddedAsarIntegrityValidation` fuse to `0` |
+| Hub | `Contents/Frameworks/UnityLicensingClient_V1.app/Contents/MacOS/Unity.Licensing.EntitlementResolver.dll` | In-place IL byte patch (`ValidateSignature` → always pass) |
+| Hub / Editor | the `.app` bundle itself | `codesign --force --deep --sign -` (ad-hoc) after patching, otherwise macOS refuses to load the modified Mach-O |
+| Editor | `Unity.app/Contents/Helpers/UnityLicensingClient.app/Contents/MacOS/Unity.Licensing.EntitlementResolver.dll` | In-place IL byte patch (managed DLL, identical to the Windows one) |
+| License | `/Library/Application Support/Unity/Unity_lic.ulf` | Generated locally; writing there triggers a single admin prompt (`osascript ... with administrator privileges`) |
+
+Notes:
+
+- The resolver DLL is a platform-independent managed assembly, so the same IL patch works on macOS and Windows.
+- Re-signing is ad-hoc (`codesign -`), no Apple Developer certificate is required. Gatekeeper may still
+  prompt on first launch of a patched Hub; `xattr -dr com.apple.quarantine` is applied automatically.
+- Everything is backed up (`*.bak`) and can be reverted from the app.
+
 ## Build from Source
 
 ### Prerequisites
@@ -98,8 +129,11 @@ npm install
 # Build frontend
 npm run build
 
-# Build Tauri app
+# Build Tauri app (Windows: NSIS / macOS: DMG, arm64)
 cargo tauri build
+
+# macOS arm64 explicitly
+cargo tauri build --target aarch64-apple-darwin
 ```
 
 ## Disclaimer

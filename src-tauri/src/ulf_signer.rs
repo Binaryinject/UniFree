@@ -81,14 +81,61 @@ pub fn sign_alf_to_ulf(
 
     let ulf_content = sign_xml(&alf_content, &private_key)?;
 
-    // 确保父目录存在
+    // 确保父目录存在（macOS 的 /Library 需要提权，交给 write_ulf 处理）
     if let Some(parent) = ulf_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create ULF directory: {}", e))?;
+        let _ = fs::create_dir_all(parent);
     }
 
-    fs::write(ulf_path, &ulf_content)
-        .map_err(|e| format!("Failed to write ULF: {}", e))?;
+    write_ulf(ulf_path, &ulf_content)?;
 
     Ok(ulf_path.to_string_lossy().to_string())
+}
+
+/// 写入 ULF：普通路径直接写；macOS 的 `/Library/Application Support/Unity` 属 root，
+/// 权限不足时通过 `osascript ... with administrator privileges` 弹窗授权后写入。
+fn write_ulf(path: &Path, content: &str) -> Result<(), String> {
+    match fs::write(path, content) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            #[cfg(target_os = "macos")]
+            {
+                write_ulf_with_admin(path, content)
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                Err(format!("Failed to write ULF: {}", e))
+            }
+        }
+        Err(e) => Err(format!("Failed to write ULF: {}", e)),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn write_ulf_with_admin(path: &Path, content: &str) -> Result<(), String> {
+    let tmp = std::env::temp_dir().join("unifree_Unity_lic.ulf");
+    fs::write(&tmp, content).map_err(|e| format!("Failed to stage ULF: {}", e))?;
+    let dir = path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("/Library/Application Support/Unity"));
+    let quote = |p: &Path| p.to_string_lossy().replace('"', "\\\"");
+    let script = format!(
+        "do shell script \"mkdir -p \\\"{}\\\" && /bin/cp -f \\\"{}\\\" \\\"{}\\\" && /usr/sbin/chown root:wheel \\\"{}\\\" && /bin/chmod 644 \\\"{}\\\"\" with administrator privileges",
+        quote(&dir),
+        quote(&tmp),
+        quote(path),
+        quote(path),
+        quote(path)
+    );
+    let out = std::process::Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .map_err(|e| format!("Failed to run osascript: {}", e))?;
+    if !out.status.success() {
+        return Err(format!(
+            "Administrator authorization failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(())
 }

@@ -24,6 +24,18 @@ pub struct EditorInfo {
     pub architecture: String,
 }
 
+/// 前端用于按平台选择进程名 / 文案
+#[command]
+pub fn get_platform() -> String {
+    if cfg!(target_os = "macos") {
+        "macos".into()
+    } else if cfg!(target_os = "windows") {
+        "windows".into()
+    } else {
+        "linux".into()
+    }
+}
+
 #[command]
 pub fn scan_unity_editors() -> Vec<EditorInfo> {
     scanner::scan_installed_editors()
@@ -96,7 +108,13 @@ pub fn check_admin() -> bool {
             false
         }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        // macOS：补丁写入 /Applications（管理员组可写）与 ~/Library，不需要 root 启动；
+        // 只有 /Library/Application Support/Unity 需要提权，那里按需走 AppleScript 授权。
+        true
+    }
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
     {
         unsafe { libc::geteuid() == 0 }
     }
@@ -122,9 +140,15 @@ pub fn relaunch_as_admin() -> Result<(), String> {
             .map_err(|e| e.to_string())?;
         Ok(())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
-        Err("Administrator relaunch is only supported on Windows".into())
+        // macOS 不整体以 root 运行：需要 root 的单个动作（写 /Library 的 ULF）走
+        // `osascript ... with administrator privileges` 按需弹窗，不再重启应用。
+        Ok(())
+    }
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        Err("Administrator relaunch is only supported on Windows and macOS".into())
     }
 }
 
@@ -148,7 +172,14 @@ pub fn open_browser(url: String) -> Result<(), String> {
             .spawn()
             .map_err(|e| e.to_string())?;
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
     {
         std::process::Command::new("xdg-open")
             .arg(&url)
@@ -160,28 +191,41 @@ pub fn open_browser(url: String) -> Result<(), String> {
 
 #[command]
 pub fn launch_hub() -> Result<(), String> {
-    let hub_exe = scanner::hub_resources_path()
-        .parent()
-        .ok_or("Cannot find Unity Hub root")?
-        .join("Unity Hub.exe");
-    if !hub_exe.exists() {
-        return Err("Unity Hub.exe not found".into());
-    }
-    #[cfg(target_os = "windows")]
+    #[cfg(target_os = "macos")]
     {
-        // Use explorer.exe to launch without inheriting admin privileges
-        std::process::Command::new("explorer.exe")
-            .arg(&hub_exe)
+        let app = scanner::hub_install_dir();
+        if !app.exists() {
+            return Err("Unity Hub.app not found".into());
+        }
+        // `open -a` 让 LaunchServices 启动，避免继承本进程的异常环境
+        std::process::Command::new("open")
+            .arg(&app)
             .spawn()
             .map_err(|e| e.to_string())?;
+        Ok(())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(target_os = "macos"))]
     {
-        std::process::Command::new(&hub_exe)
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        let hub_exe = scanner::hub_install_dir().join("Unity Hub.exe");
+        if !hub_exe.exists() {
+            return Err("Unity Hub.exe not found".into());
+        }
+        #[cfg(target_os = "windows")]
+        {
+            // Use explorer.exe to launch without inheriting admin privileges
+            std::process::Command::new("explorer.exe")
+                .arg(&hub_exe)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            std::process::Command::new(&hub_exe)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 #[command]
@@ -205,48 +249,67 @@ pub fn generate_license_direct(product: String, private_key_pem: Option<String>)
 
 #[command]
 pub fn get_hub_path() -> String {
-    let resources = scanner::hub_resources_path();
-    resources.parent()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default()
+    scanner::hub_install_dir().to_string_lossy().to_string()
 }
 
 #[command]
 pub async fn select_hub_path(app: tauri::AppHandle) -> Result<String, String> {
     use tauri_plugin_dialog::{DialogExt, FilePath};
 
-    let file = app.dialog().file()
-        .add_filter("Unity Hub", &["exe"])
-        .set_title("Select Unity Hub.exe")
-        .blocking_pick_file()
-        .ok_or("No file selected")?;
-
-    let exe_path = match file {
-        FilePath::Path(p) => p,
-        _ => return Err("Invalid file path".into()),
+    #[cfg(target_os = "macos")]
+    let picked = {
+        let folder = app.dialog().file()
+            .set_title("Select Unity Hub.app")
+            .blocking_pick_folder()
+            .ok_or("No folder selected")?;
+        match folder {
+            FilePath::Path(p) => p,
+            _ => return Err("Invalid file path".into()),
+        }
+    };
+    #[cfg(not(target_os = "macos"))]
+    let picked = {
+        let file = app.dialog().file()
+            .add_filter("Unity Hub", &["exe"])
+            .set_title("Select Unity Hub.exe")
+            .blocking_pick_file()
+            .ok_or("No file selected")?;
+        match file {
+            FilePath::Path(p) => p,
+            _ => return Err("Invalid file path".into()),
+        }
     };
 
-    // Verify it's Unity Hub.exe
-    let exe_name = exe_path.file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-    if !exe_name.eq_ignore_ascii_case("Unity Hub.exe") {
-        return Err("Please select Unity Hub.exe".into());
+    #[cfg(target_os = "macos")]
+    {
+        let install_dir = if picked.extension().map(|e| e == "app").unwrap_or(false) {
+            picked
+        } else {
+            let nested = picked.join("Unity Hub.app");
+            if nested.exists() { nested } else { picked }
+        };
+        if !install_dir.join("Contents").join("Resources").join("app.asar").exists() {
+            return Err("Invalid Unity Hub installation: Contents/Resources/app.asar not found".into());
+        }
+        app_config::set_hub_install_path(&install_dir.to_string_lossy())?;
+        Ok(install_dir.to_string_lossy().to_string())
     }
 
-    let install_dir = exe_path.parent()
-        .ok_or("Cannot get install directory")?;
-
-    // Verify resources folder exists
-    let resources_dir = install_dir.join("resources");
-    if !resources_dir.exists() {
-        return Err("Invalid Unity Hub installation: resources folder not found".into());
+    #[cfg(not(target_os = "macos"))]
+    {
+        let exe_name = picked.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if !exe_name.eq_ignore_ascii_case("Unity Hub.exe") {
+            return Err("Please select Unity Hub.exe".into());
+        }
+        let install_dir = picked.parent().ok_or("Cannot get install directory")?;
+        if !install_dir.join("resources").exists() {
+            return Err("Invalid Unity Hub installation: resources folder not found".into());
+        }
+        app_config::set_hub_install_path(&install_dir.to_string_lossy())?;
+        Ok(install_dir.to_string_lossy().to_string())
     }
-
-    // Save to config
-    app_config::set_hub_install_path(&install_dir.to_string_lossy())?;
-
-    Ok(install_dir.to_string_lossy().to_string())
 }
 
 #[command]

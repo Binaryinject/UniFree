@@ -121,7 +121,31 @@ impl AlfGenerator {
             }
         }
 
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "macos")]
+        {
+            // macOS 与 Windows 的绑定项编号一致，值取本机真实硬件标识：
+            //   Binding1 = 硬件 UUID（IOPlatformUUID）
+            //   Binding2 = 启动盘卷 UUID 经 FlipAndCodeBytes 变换
+            //   Binding4 = 主机序列号（Base64）
+            //   Binding5 = 主网卡 MAC
+            if let Some(uuid) = macos::get_platform_uuid() {
+                bindings.push((1, uuid));
+            }
+            if let Some(serial) = macos::get_boot_volume_uuid() {
+                let encoded = flip_and_code_bytes(&serial);
+                if !encoded.is_empty() {
+                    bindings.push((2, encoded));
+                }
+            }
+            if let Some(serial) = macos::get_hardware_serial() {
+                bindings.push((4, base64_encode(&serial)));
+            }
+            if let Some(mac) = macos::get_mac_address() {
+                bindings.push((5, mac));
+            }
+        }
+
+        #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
         {
             bindings.push((1, "Non-Windows-Platform".to_string()));
         }
@@ -238,6 +262,79 @@ fn format_xml_escape(s: &str) -> String {
 /// Base64 编码
 fn base64_encode(s: &str) -> String {
     general_purpose::STANDARD.encode(s.as_bytes())
+}
+
+
+/// macOS 硬件标识（全部通过系统自带命令读取，避免额外依赖）
+#[cfg(target_os = "macos")]
+pub mod macos {
+    use std::process::Command;
+
+    fn ioreg_value(class: &str, key: &str) -> Option<String> {
+        let out = Command::new("/usr/sbin/ioreg")
+            .args(["-rd1", "-c", class])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            if let Some(idx) = line.find(&format!("\"{}\" = ", key)) {
+                let rest = &line[idx..];
+                let value = rest.split('"').nth(3)?.trim().to_string();
+                if !value.is_empty() {
+                    return Some(value);
+                }
+            }
+        }
+        None
+    }
+
+    /// IOPlatformUUID：硬件 UUID，等价于 Windows Product ID 的机器唯一标识
+    pub fn get_platform_uuid() -> Option<String> {
+        ioreg_value("IOPlatformExpertDevice", "IOPlatformUUID")
+    }
+
+    /// 主机序列号
+    pub fn get_hardware_serial() -> Option<String> {
+        ioreg_value("IOPlatformExpertDevice", "IOPlatformSerialNumber")
+    }
+
+    /// 启动盘卷 UUID（取根卷，回退 data 卷）
+    pub fn get_boot_volume_uuid() -> Option<String> {
+        for dev in ["/", "/System/Volumes/Data"] {
+            let out = Command::new("/usr/sbin/diskutil")
+                .args(["info", dev])
+                .output()
+                .ok()?;
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                if let Some(v) = line.trim().strip_prefix("Volume UUID:") {
+                    let v = v.trim();
+                    if !v.is_empty() {
+                        return Some(v.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// 主网卡 MAC（en0 优先）
+    pub fn get_mac_address() -> Option<String> {
+        for iface in ["en0", "en1"] {
+            let out = Command::new("/sbin/ifconfig").arg(iface).output().ok()?;
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                let line = line.trim();
+                if let Some(rest) = line.strip_prefix("ether ") {
+                    let mac = rest.trim().to_string();
+                    if !mac.is_empty() {
+                        return Some(mac);
+                    }
+                }
+            }
+        }
+        None
+    }
 }
 
 /// Windows 特定实现

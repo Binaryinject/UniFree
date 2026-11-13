@@ -4,6 +4,13 @@ import type { LogEntry } from "../App";
 
 export type AddLog = (level: LogEntry["level"], message: string) => void;
 
+/** 运行平台（macOS 只有 arm64 构建） */
+export const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
+
+/** Hub / 编辑器的进程名随平台不同 */
+export const hubProcessName = isMac ? "Unity Hub" : "Unity Hub.exe";
+export const editorProcessName = isMac ? "Unity" : "Unity.exe";
+
 export function logLicenseResult(t: TFunction, addLog: AddLog, result: string) {
   if (result.startsWith("skipped_missing_signature:")) {
     addLog("warn", t("log.license_skipped_missing_signature"));

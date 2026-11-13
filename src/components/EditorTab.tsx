@@ -7,7 +7,7 @@ import {
 import { Wrench, Warning, DownloadSimple, FolderOpen, Plus, Trash, ArrowClockwise } from "@phosphor-icons/react";
 import type { LogEntry } from "../App";
 import StatusChip from "./StatusChip";
-import { logLicenseResult } from "../utils/actions";
+import { logLicenseResult, editorProcessName } from "../utils/actions";
 
 interface EditorInfo {
   version: string;
@@ -91,10 +91,10 @@ export default function EditorTab({ addLog, hubStatus }: Props) {
     setBusyPath(editor.dll_path);
     try {
       if (action === "patch") {
-        const running = await invoke<boolean>("check_process", { name: "Unity.exe" });
+        const running = await invoke<boolean>("check_process", { name: editorProcessName });
         if (running) {
           addLog("warn", t("log.editor_running"));
-          await invoke("kill_process", { name: "Unity.exe" });
+          await invoke("kill_process", { name: editorProcessName });
           await new Promise((r) => setTimeout(r, 1000));
         }
         const msg = await invoke<string>("patch_editor_dll", { dllPath: editor.dll_path, version: editor.version });
@@ -135,10 +135,10 @@ export default function EditorTab({ addLog, hubStatus }: Props) {
 
     if (action === "patch") {
       try {
-        const running = await invoke<boolean>("check_process", { name: "Unity.exe" });
+        const running = await invoke<boolean>("check_process", { name: editorProcessName });
         if (running) {
           addLog("warn", t("log.editor_running"));
-          await invoke("kill_process", { name: "Unity.exe" });
+          await invoke("kill_process", { name: editorProcessName });
           await new Promise((r) => setTimeout(r, 1000));
         }
       } catch { /* ignore */ }

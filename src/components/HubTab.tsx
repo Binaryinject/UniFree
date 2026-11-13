@@ -7,7 +7,7 @@ import {
 import { ShieldCheck, ArrowCounterClockwise, Warning, FolderOpen } from "@phosphor-icons/react";
 import type { LogEntry } from "../App";
 import StatusChip from "./StatusChip";
-import { logLicenseResult, relaunchAsAdmin } from "../utils/actions";
+import { logLicenseResult, relaunchAsAdmin, hubProcessName } from "../utils/actions";
 
 interface Props {
   addLog: (level: LogEntry["level"], message: string) => void;
@@ -79,10 +79,10 @@ export default function HubTab({ addLog, licenseStatus, isAdmin, hubStatus, onRe
 
   async function doPatch() {
     try {
-      const running = await invoke<boolean>("check_process", { name: "Unity Hub.exe" });
+      const running = await invoke<boolean>("check_process", { name: hubProcessName });
       if (running) {
         addLog("warn", t("log.hub_running"));
-        await invoke("kill_process", { name: "Unity Hub.exe" });
+        await invoke("kill_process", { name: hubProcessName });
         await new Promise((r) => setTimeout(r, 1000));
       }
     } catch { /* ignore */ }
@@ -137,10 +137,10 @@ export default function HubTab({ addLog, licenseStatus, isAdmin, hubStatus, onRe
 
   async function doRestore() {
     try {
-      const running = await invoke<boolean>("check_process", { name: "Unity Hub.exe" });
+      const running = await invoke<boolean>("check_process", { name: hubProcessName });
       if (running) {
         addLog("warn", t("log.hub_running"));
-        await invoke("kill_process", { name: "Unity Hub.exe" });
+        await invoke("kill_process", { name: hubProcessName });
         await new Promise((r) => setTimeout(r, 1000));
       }
     } catch { /* ignore */ }

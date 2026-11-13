@@ -2,7 +2,7 @@ use crate::commands::EditorInfo;
 use crate::patcher;
 use serde::Deserialize;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn base_install_path() -> PathBuf {
     #[cfg(target_os = "windows")]
@@ -86,23 +86,56 @@ fn target_file_name_for_version(version_folder: &str) -> &'static str {
     }
 }
 
+/// 编辑器自带 licensing client 所在目录（跨平台统一入口）
+pub fn editor_licensing_dir(folder: &Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        // Unity 6：Unity.app/Contents/Helpers/UnityLicensingClient.app/Contents/MacOS
+        let helpers = folder
+            .join("Unity.app")
+            .join("Contents")
+            .join("Helpers")
+            .join("UnityLicensingClient.app")
+            .join("Contents")
+            .join("MacOS");
+        if helpers.exists() {
+            return helpers;
+        }
+        // 旧版（Unity 2021-2022）布局
+        folder
+            .join("Unity.app")
+            .join("Contents")
+            .join("Resources")
+            .join("Licensing")
+            .join("Client")
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        folder
+            .join("Editor")
+            .join("Data")
+            .join("Resources")
+            .join("Licensing")
+            .join("Client")
+    }
+}
+
 fn dll_path_for_folder(folder: &PathBuf) -> PathBuf {
     let version = folder.file_name().unwrap_or_default().to_string_lossy();
     let target_name = target_file_name_for_version(&version);
-    #[cfg(target_os = "windows")]
-    {
-        let client = folder.join("Editor").join("Data").join("Resources").join("Licensing").join("Client");
-        let preferred = client.join(target_name);
-        if preferred.exists() { preferred } else if client.join("Unity.Licensing.Client.exe").exists() {
-            client.join("Unity.Licensing.Client.exe")
-        } else {
-            client.join("System.Security.Cryptography.Xml.dll")
-        }
+    let client = editor_licensing_dir(folder);
+    let preferred = client.join(target_name);
+    if preferred.exists() {
+        preferred
+    } else if client.join("Unity.Licensing.Client.exe").exists() {
+        client.join("Unity.Licensing.Client.exe")
+    } else if client.join("Unity.Licensing.Client").exists() {
+        client.join("Unity.Licensing.Client")
+    } else if client.join("Unity.Licensing.EntitlementResolver.dll").exists() {
+        client.join("Unity.Licensing.EntitlementResolver.dll")
+    } else {
+        client.join("System.Security.Cryptography.Xml.dll")
     }
-    #[cfg(target_os = "macos")]
-    { folder.join("Contents").join("Resources").join("Licensing").join("Client").join(target_name) }
-    #[cfg(target_os = "linux")]
-    { folder.join("Editor").join("Data").join("Resources").join("Licensing").join("Client").join(target_name) }
 }
 
 fn read_product_name(folder: &PathBuf) -> String {
@@ -174,13 +207,65 @@ fn read_unity_exe_version(exe: &PathBuf) -> Option<String> {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+/// macOS：`Unity.app` 的版本号取安装目录名（如 `6000.3.21f1`），
+/// 读不到时回退 `Info.plist` 的 `CFBundleVersion`。
+#[cfg(target_os = "macos")]
+fn read_unity_exe_version(app: &PathBuf) -> Option<String> {
+    if let Some(name) = app.parent().and_then(|p| p.file_name()) {
+        let version = name.to_string_lossy().to_string();
+        if version.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+            return Some(version);
+        }
+    }
+    let plist = app.join("Contents").join("Info.plist");
+    let out = std::process::Command::new("/usr/libexec/PlistBuddy")
+        .args(["-c", "Print :CFBundleVersion"])
+        .arg(&plist)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!version.is_empty()).then_some(version)
+}
+
+#[cfg(target_os = "linux")]
 fn read_unity_exe_version(_exe: &PathBuf) -> Option<String> { None }
 
-/// 读取任意 PE 文件的 `ProductVersion`（Windows 版本资源）。
-/// 其他平台返回 None；用于嗅探 Hub 安装版本（patcher 判定陈旧 `.bak` 备份）。
+/// 读取安装版本号：Windows 取 PE 的 `ProductVersion` 资源，
+/// macOS 取 `.app` 包的 `CFBundleShortVersionString`。
+/// 用于嗅探 Hub 版本（patcher 判定陈旧 `.bak` 备份）。
 pub fn read_file_product_version(path: &std::path::Path) -> Option<String> {
-    read_unity_exe_version(&path.to_path_buf())
+    #[cfg(target_os = "windows")]
+    {
+        read_unity_exe_version(&path.to_path_buf())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // 传入的可能是 app 包内的可执行文件（如 Electron Framework），向上找 .app
+        let mut current = Some(path);
+        while let Some(p) = current {
+            if p.extension().map(|e| e == "app").unwrap_or(false) {
+                let out = std::process::Command::new("/usr/libexec/PlistBuddy")
+                    .args(["-c", "Print :CFBundleShortVersionString"])
+                    .arg(p.join("Contents").join("Info.plist"))
+                    .output()
+                    .ok()?;
+                if !out.status.success() {
+                    return None;
+                }
+                let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                return (!version.is_empty()).then_some(version);
+            }
+            current = p.parent();
+        }
+        None
+    }
+    #[cfg(target_os = "linux")]
+    {
+        read_unity_exe_version(&path.to_path_buf())
+    }
 }
 
 fn read_architecture(folder: &PathBuf) -> String {
@@ -336,39 +421,23 @@ fn build_editor_info(version: &str, location: Option<serde_json::Value>, arch: &
 }
 
 fn derive_dll_from_exe(exe: &PathBuf) -> PathBuf {
-    // exe is like: ...\2022.3.1f1\Editor\Unity.exe
-    // dll is:      ...\2022.3.1f1\Editor\Data\Resources\Licensing\Client\<dll_name>
-    if let Some(editor_dir) = exe.parent() {
-        let version = editor_dir.parent()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let dll_name = target_file_name_for_version(&version);
-        #[cfg(target_os = "windows")]
-        {
-            let client = editor_dir.join("Data").join("Resources").join("Licensing").join("Client");
-            let preferred = client.join(dll_name);
-            if preferred.exists() { preferred } else if client.join("Unity.Licensing.Client.exe").exists() {
-                client.join("Unity.Licensing.Client.exe")
-            } else if client.join("Unity.Licensing.EntitlementResolver.dll").exists() {
-                client.join("Unity.Licensing.EntitlementResolver.dll")
-            } else {
-                client.join("System.Security.Cryptography.Xml.dll")
-            }
-        }
-        #[cfg(target_os = "macos")]
-        {
-            if let Some(app_dir) = editor_dir.parent().and_then(|p| p.parent()) {
-                app_dir.join("Contents").join("Resources").join("Licensing").join("Client").join(dll_name)
-            } else {
-                PathBuf::new()
-            }
-        }
-        #[cfg(target_os = "linux")]
-        { editor_dir.join("Data").join("Resources").join("Licensing").join("Client").join(dll_name) }
+    // Windows/Linux: .../<version>/Editor/Unity(.exe)  → <version>
+    // macOS:         .../<version>/Unity.app            → <version>
+    let Some(parent) = exe.parent() else {
+        return PathBuf::new();
+    };
+    #[cfg(target_os = "macos")]
+    let folder = parent.to_path_buf();
+    #[cfg(not(target_os = "macos"))]
+    let folder = if parent.file_name().map(|n| n == "Editor").unwrap_or(false) {
+        parent.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| parent.to_path_buf())
     } else {
-        PathBuf::new()
+        parent.to_path_buf()
+    };
+    if !folder.exists() {
+        return PathBuf::new();
     }
+    dll_path_for_folder(&folder)
 }
 
 fn read_secondary_install_path() -> Option<PathBuf> {
@@ -384,25 +453,66 @@ fn read_secondary_install_path() -> Option<PathBuf> {
     None
 }
 
-pub fn hub_resources_path() -> PathBuf {
-    // Check saved config first
+/// Unity Hub 安装位置：macOS 为 `.app` 包目录，Windows 为含 `Unity Hub.exe` 的目录。
+pub fn hub_install_dir() -> PathBuf {
     if let Some(custom_path) = crate::app_config::get_hub_install_path() {
-        return custom_path.join("resources");
+        return normalize_hub_install_dir(custom_path);
     }
-
-    // Default paths
     #[cfg(target_os = "windows")]
     {
         let pf = std::env::var("PROGRAMFILES").unwrap_or_else(|_| r"C:\Program Files".into());
-        PathBuf::from(pf).join("Unity Hub").join("resources")
+        PathBuf::from(pf).join("Unity Hub")
     }
     #[cfg(target_os = "macos")]
     {
-        PathBuf::from("/Applications/Unity Hub.app/Contents/Resources")
+        PathBuf::from("/Applications/Unity Hub.app")
     }
     #[cfg(target_os = "linux")]
     {
-        PathBuf::from("/usr/share/unityhub/resources")
+        PathBuf::from("/usr/share/unityhub")
+    }
+}
+
+/// 用户自定义 Hub 路径归一化：macOS 允许选中 `Unity Hub.app` 或其父目录。
+fn normalize_hub_install_dir(path: PathBuf) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        if path.extension().map(|e| e == "app").unwrap_or(false) {
+            return path;
+        }
+        let app = path.join("Unity Hub.app");
+        if app.exists() {
+            return app;
+        }
+    }
+    path
+}
+
+pub fn hub_resources_path() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        hub_install_dir().join("Contents").join("Resources")
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        hub_install_dir().join("resources")
+    }
+}
+
+/// Hub 自带 licensing client 的目录（含 `Unity.Licensing.EntitlementResolver.dll`）。
+pub fn hub_licensing_dir() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        hub_install_dir()
+            .join("Contents")
+            .join("Frameworks")
+            .join("UnityLicensingClient_V1.app")
+            .join("Contents")
+            .join("MacOS")
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        hub_install_dir().join("UnityLicensingClient_V1")
     }
 }
 

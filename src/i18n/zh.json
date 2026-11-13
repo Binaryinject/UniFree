@@ -28,7 +28,7 @@
     "config_patch_desc": "补丁 app.asar 的登录与更新配置",
     "license_missing_signature": "Unity_lic.ulf 缺少 Signature 节点。Unity Licensing Client 会记录 Missing Signature node，并处理为 0 个授权文件。",
     "license_required_hint": "请先在许可证选项卡生成许可证，然后再补丁 Hub。",
-    "not_found_hint": "未在默认位置找到 Unity Hub，点击选择 Unity Hub.exe 位置。",
+    "not_found_hint": "未在默认位置找到 Unity Hub，点击选择 Unity Hub.app / Unity Hub.exe 位置。",
     "select_path": "选择",
     "install_path": "Unity Hub 位置",
     "install_path_default": "默认: C:\\Program Files\\Unity Hub",

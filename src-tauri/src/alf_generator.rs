@@ -8,17 +8,11 @@ pub fn generate_alf_content(product: &str) -> String {
     generator.generate()
 }
 
-/// 获取 ALF 文件路径
+/// 获取 ALF 文件路径（Windows: %LOCALAPPDATA%\UniFree，macOS: ~/Library/Application Support/UniFree）
 pub fn get_alf_path() -> PathBuf {
-    let local_app_data = std::env::var("LOCALAPPDATA")
-        .unwrap_or_else(|_| {
-            let home = std::env::var("USERPROFILE").unwrap_or_else(|_| r"C:\Users\Public".into());
-            format!(r"{}\AppData\Local", home)
-        });
-
-    let alf_dir = PathBuf::from(local_app_data).join("UniFree");
+    let base = dirs::data_local_dir().unwrap_or_else(std::env::temp_dir);
+    let alf_dir = base.join("UniFree");
     let _ = fs::create_dir_all(&alf_dir);
-
     alf_dir.join("Unity_lic.alf")
 }
 

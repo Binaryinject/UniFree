@@ -28,7 +28,7 @@
     "config_patch_desc": "Patch app.asar sign-in and update settings",
     "license_missing_signature": "Unity_lic.ulf is missing the Signature node. Unity Licensing Client logs this as Missing Signature node and processes 0 license files.",
     "license_required_hint": "Please generate a license in the License tab first, then patch Hub.",
-    "not_found_hint": "Unity Hub not found in default location. Click to select Unity Hub.exe location.",
+    "not_found_hint": "Unity Hub not found in default location. Click to select the Unity Hub.app / Unity Hub.exe location.",
     "select_path": "Select",
     "install_path": "Unity Hub Location",
     "install_path_default": "Using default: C:\\Program Files\\Unity Hub",

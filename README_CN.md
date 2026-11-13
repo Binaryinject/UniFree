@@ -17,6 +17,7 @@
 - **现代化界面** - 基于 Tauri 2.0 + React + Material-UI 构建
 - **多语言支持** - 中文 & 英文
 - **自动备份** - 所有修改均可还原
+- **macOS（Apple Silicon）** - 原生 arm64 构建；Unity 6 编辑器走就地 IL 补丁 + ad-hoc 重签
 
 ## 快速开始
 
@@ -80,6 +81,34 @@ UniFree 就地重建 `app.asar`（保留 `app.asar.unpacked/` 里的 native 模�
 | Editor (2019-2022) | `System.Security.Cryptography.Xml.dll` | 替换为预补丁 DLL |
 | License | `C:\ProgramData\Unity\Unity_lic.ulf` | 生成 RSA 签名的许可证文件 |
 
+## macOS（Apple Silicon）
+
+macOS 版本**只支持 Apple Silicon（M 系列 / arm64）**，Intel Mac 不在支持范围内。
+
+当前 macOS 覆盖范围：**使用托管 licensing client 的 Unity 6 编辑器**
+（6000.0 – 6000.3.27，即目录里仍有 `Unity.Licensing.EntitlementResolver.dll` 的版本）与 Unity Hub。
+2019–2022 依赖 Windows 侧的 DLL 替换，macOS 暂不覆盖。
+更新的版本（如 6000.3.28+、6000.7+）改用 **Native AOT** client——单个 arm64 Mach-O、
+不再有托管 DLL，需要独立的 arm64 原生锚点，目前尚未实现；界面会明确提示不支持，
+而不是写入无效补丁。
+
+macOS 补丁做了什么：
+
+| 组件 | 文件 | 操作 |
+|------|------|------|
+| Hub | `Unity Hub.app/Contents/Resources/app.asar` | 就地重写 asar（JS 补丁与 Windows 一致） |
+| Hub | `Contents/Frameworks/Electron Framework.framework/Electron Framework` | 翻转 `EnableEmbeddedAsarIntegrityValidation` fuse 为 `0` |
+| Hub | `.../UnityLicensingClient_V1.app/Contents/MacOS/Unity.Licensing.EntitlementResolver.dll` | 就地 IL 字节补丁（`ValidateSignature` 恒通过） |
+| Hub / 编辑器 | `.app` 包本身 | 补丁后 `codesign --force --deep --sign -`（ad-hoc）重签，否则 macOS 拒绝加载被改动的 Mach-O |
+| 编辑器 | `Unity.app/Contents/Helpers/UnityLicensingClient.app/Contents/MacOS/Unity.Licensing.EntitlementResolver.dll` | 就地 IL 字节补丁（托管 DLL，与 Windows 完全一致） |
+| 许可证 | `/Library/Application Support/Unity/Unity_lic.ulf` | 本地生成；写入时弹一次管理员授权（`osascript ... with administrator privileges`） |
+
+说明：
+
+- resolver DLL 是与平台无关的托管程序集，同一套 IL 补丁在 macOS / Windows 通用。
+- 重签是 ad-hoc（`codesign -`），不需要 Apple 开发者证书；补丁后会自动清除 quarantine 标记。
+- 所有改动都有 `*.bak` 备份，可在应用内还原。
+
 ## 从源码构建
 
 ### 前置要求
@@ -96,8 +125,11 @@ npm install
 # 构建前端
 npm run build
 
-# 构建 Tauri 应用
+# 构建 Tauri 应用（Windows: NSIS / macOS: DMG，arm64）
 cargo tauri build
+
+# 明确构建 macOS arm64
+cargo tauri build --target aarch64-apple-darwin
 ```
 
 ## 免责声明

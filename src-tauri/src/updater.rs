@@ -56,7 +56,8 @@ pub async fn check_for_update(current_version: &str) -> Result<Option<UpdateInfo
         return Ok(None);
     }
 
-    // Find the NSIS installer asset
+    // 按平台挑选安装包：Windows 用 NSIS 安装器，macOS 用 arm64 DMG
+    #[cfg(target_os = "windows")]
     let asset = release
         .assets
         .iter()
@@ -66,6 +67,14 @@ pub async fn check_for_update(current_version: &str) -> Result<Option<UpdateInfo
                 || a.name.ends_with("installer.exe")
         })
         .or_else(|| release.assets.iter().find(|a| a.name.ends_with(".exe")));
+    #[cfg(target_os = "macos")]
+    let asset = release
+        .assets
+        .iter()
+        .find(|a| a.name.ends_with("aarch64.dmg"))
+        .or_else(|| release.assets.iter().find(|a| a.name.ends_with(".dmg")));
+    #[cfg(target_os = "linux")]
+    let asset: Option<&GitHubAsset> = None;
 
     let asset = match asset {
         Some(a) => a,
@@ -206,10 +215,20 @@ pub async fn download_and_install(
         std::process::exit(0);
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        // macOS 无法静默替换正在运行的 .app：打开 DMG，由用户拖入「应用程序」。
+        std::process::Command::new("open")
+            .arg(&file_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open DMG: {}", e))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
     {
         let _ = file_path;
-        return Err("Silent install is only supported on Windows".into());
+        return Err("Auto install is not supported on Linux".into());
     }
 }
 

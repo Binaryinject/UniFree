@@ -77,6 +77,21 @@ const TARGET_STR: &str = "The digital signature is invalid.";
 /// - `Err`：不是托管程序集 / 元数据损坏 / 未命中任何模式，
 ///   调用方应回退到预编译补丁 DLL。
 pub fn patch_resolver(data: &[u8]) -> Result<(Vec<u8>, PatchReport), String> {
+    patch_resolver_impl(data, true)
+}
+
+/// 与 `patch_resolver` 相同，但**保留** ReadyToRun 头（不清 `ManagedNativeHeader`）。
+///
+/// macOS 上必须用这个变体：.NET 宿主在启动时按 PE 的 R2R 头决定 TPA 条目，清掉
+/// `ManagedNativeHeader` 后程序集会被直接判为不可加载（表现为
+/// `FileNotFoundException: Could not load file or assembly '...EntitlementResolver'`）。
+/// 因此 macOS 侧保留 R2R 头、只改 IL，并让 licensing client 以
+/// `DOTNET_ReadyToRun=0` 启动，使运行时不走原生代码（见 patcher 里的 launcher shim）。
+pub fn patch_resolver_keep_r2r(data: &[u8]) -> Result<(Vec<u8>, PatchReport), String> {
+    patch_resolver_impl(data, false)
+}
+
+fn patch_resolver_impl(data: &[u8], strip_r2r: bool) -> Result<(Vec<u8>, PatchReport), String> {
     let md = ManagedMetadata::parse(data)?;
 
     let mut out = data.to_vec();
@@ -136,7 +151,7 @@ pub fn patch_resolver(data: &[u8]) -> Result<(Vec<u8>, PatchReport), String> {
     // 清零 CLI 头 ManagedNativeHeader（RVA + Size）后，运行时按纯 IL 加载 → 从补丁后的
     // IL 重新 JIT。预编译（dnlib 重写）产物本来就无 native header，此操作是无害幂等。
     let (cli_flags, mnh_rva, mnh_size) = md.cli_header_fields();
-    if mnh_rva != 0 || mnh_size != 0 {
+    if strip_r2r && (mnh_rva != 0 || mnh_size != 0) {
         cli_header_clear_managed_native_header(&mut out, md.cli_off);
         report.r2r_native_header_cleared = true;
     }

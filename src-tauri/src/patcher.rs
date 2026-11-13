@@ -10,6 +10,35 @@ fn hub_asar_path() -> PathBuf {
     hub_resources_path().join("app.asar")
 }
 
+/// 备份文件位置。
+///
+/// - Windows / Linux：与目标同目录的 `<file>.bak`（保持原有行为）。
+/// - macOS：备份**不能**留在 `.app` 包内——包里多出任何未被封签的文件都会让
+///   `codesign` 报 "unsealed contents" 并使签名失效。因此统一放到
+///   `~/Library/Application Support/UniFree/backups/<路径转写>/<文件名>`。
+pub fn backup_path(path: &Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        let base = dirs::data_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("UniFree")
+            .join("backups");
+        let key: String = path
+            .to_string_lossy()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        let dir = base.join(key);
+        let _ = fs::create_dir_all(&dir);
+        dir.join(path.file_name().unwrap_or_else(|| std::ffi::OsStr::new("backup")))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        PathBuf::from(format!("{}.bak", path.display()))
+    }
+}
+
+
 /// ValidateSignature 包装函数的字节锚点（用于检测 Native AOT exe 是否已补丁）
 const VALIDATE_SIG_PATTERN: &str = "57 56 53 48 83 EC 20 48 8B DA 48 85 DB 74 ?? 48 8B 71 10 40 0F B6 79 18 48 8D 15 ?? ?? ?? ?? 48 39 11 74 ?? 48 8D 15 ?? ?? ?? ?? 48 39 11 75 ?? 48 8B D3";
 
@@ -39,7 +68,7 @@ pub fn get_editor_dll_status(dll_path: &str) -> String {
     }
 
     // 检查是否有备份文件（表示已补丁）
-    let bak_path = format!("{}.bak", dll_path);
+    let bak_path = backup_path(Path::new(dll_path));
     if Path::new(&bak_path).exists() {
         return "patched".into();
     }
@@ -49,6 +78,37 @@ pub fn get_editor_dll_status(dll_path: &str) -> String {
     let Ok(data) = fs::read(path) else {
         return "unknown".into();
     };
+
+    // macOS：launcher shim 存在说明已执行过补丁（R2R 关闭 + IL 已改）
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(dir) = path.parent() {
+            if dir.join("Unity.Licensing.Client.real").exists() {
+                return "patched".into();
+            }
+        }
+    }
+
+    // 通用：Unity.Licensing.EntitlementResolver.dll 是托管程序集，与平台无关，
+    // 用 IL 结构探测（ValidateSignature 的 4 条指令是否已被改写）判断补丁状态。
+    // macOS 上不存在预编译替换 DLL，必须走这条路径。
+    if file_name == "Unity.Licensing.EntitlementResolver.dll" {
+        #[cfg(target_os = "macos")]
+        let probe = crate::il_patch::patch_resolver_keep_r2r(&data);
+        #[cfg(not(target_os = "macos"))]
+        let probe = crate::il_patch::patch_resolver(&data);
+        if let Ok((_, report)) = probe {
+            // 先看原始错误块是否还在（原始文件），再看补丁窗口：
+            // 未补丁的 DLL 里也可能出现形似补丁窗口的字节，顺序颠倒会误报 patched。
+            if report.patched_sites > 0 {
+                return "original".into();
+            }
+            if report.already_patched_sites > 0 {
+                return "patched_no_backup".into();
+            }
+        }
+    }
+
     let patched = match file_name {
         "System.Security.Cryptography.Xml.dll" => {
             data.as_slice() == include_bytes!("../resources/win/System.Security.Cryptography.Xml.dll").as_slice()
@@ -110,7 +170,7 @@ pub fn patch_licensing_client(exe_path: &str) -> Result<String, String> {
     }
 
     // 首次创建备份，之后每次从备份恢复确保干净状态
-    let bak = format!("{}.bak", exe_path);
+    let bak = backup_path(Path::new(exe_path));
     let bak_path = Path::new(&bak);
     if !bak_path.exists() {
         fs::copy(path, &bak).map_err(|e| e.to_string())?;
@@ -151,6 +211,42 @@ pub fn patch_entitlement_resolver(dll_path: &str, display_version: Option<&str>)
     // 6000.7+: Native AOT exe，字节级 patch
     if dll_path.ends_with(".exe") {
         return patch_licensing_client(dll_path);
+    }
+
+    // macOS：仅支持 Unity 6（6000.0-6000.6）的就地 IL 补丁。
+    // 该 DLL 是跨平台的托管程序集，IL 结构与 Windows 完全一致，补丁方法可直接复用。
+    // 更老的版本（2019-2022）依赖 Windows 侧预编译 DLL 替换，macOS 暂不覆盖；
+    // 6000.7+ 的 Native AOT 客户端是 arm64 Mach-O，需要独立锚点，暂不覆盖。
+    #[cfg(target_os = "macos")]
+    {
+        let path = Path::new(dll_path);
+        if !path.exists() {
+            return Err("Licensing client not found".into());
+        }
+        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+        if file_name == "Unity.Licensing.Client" {
+            // Unity 6000.3.28+ / 6000.7+ 的 macOS licensing client 是 Native AOT（arm64 Mach-O，
+            // 目录里没有托管 DLL），无法走 IL 补丁，需要独立的 arm64 原生锚点。
+            return Err(
+                "macOS: this editor ships a Native AOT licensing client (no managed DLLs) \
+                 - native arm64 patch not implemented yet; managed clients (e.g. 6000.3.21-27) are supported"
+                    .into(),
+            );
+        }
+        if file_name != "Unity.Licensing.EntitlementResolver.dll" {
+            return Err(format!("Unsupported Unity licensing target on macOS: {}", file_name));
+        }
+        let msg = patch_entitlement_resolver_inplace(dll_path)?;
+        let shim_note = match ensure_r2r_env_shim(path.parent().unwrap_or(Path::new(""))) {
+            Ok(true) => "，已为 licensing client 安装 DOTNET_ReadyToRun=0 启动器",
+            Ok(false) => "",
+            Err(e) => {
+                eprintln!("⚠ macOS: launcher shim not installed: {}", e);
+                "，⚠ 启动器 shim 未安装（补丁可能不生效）"
+            }
+        };
+        resign_editor_licensing_client(path);
+        return Ok(format!("{} (macOS in-place IL patch){}", msg, shim_note));
     }
     let path = Path::new(dll_path);
     if !path.exists() {
@@ -221,7 +317,7 @@ pub fn patch_entitlement_resolver(dll_path: &str, display_version: Option<&str>)
     }
 
     // 创建备份
-    let bak_path = format!("{}.bak", dll_path);
+    let bak_path = backup_path(Path::new(dll_path));
     if !Path::new(&bak_path).exists() {
         fs::copy(path, &bak_path).map_err(|e| e.to_string())?;
     }
@@ -241,9 +337,15 @@ pub fn patch_entitlement_resolver(dll_path: &str, display_version: Option<&str>)
 fn patch_entitlement_resolver_inplace(dll_path: &str) -> Result<String, String> {
     let path = Path::new(dll_path);
     let data = fs::read(path).map_err(|e| format!("Failed to read resolver: {}", e))?;
-    match crate::il_patch::patch_resolver(&data) {
+    // macOS：必须保留 R2R 头（清掉会让 .NET 宿主完全不加载该程序集），
+    // 改为让 licensing client 以 DOTNET_ReadyToRun=0 启动（见 ensure_r2r_env_shim）。
+    #[cfg(target_os = "macos")]
+    let patch_result = crate::il_patch::patch_resolver_keep_r2r(&data);
+    #[cfg(not(target_os = "macos"))]
+    let patch_result = crate::il_patch::patch_resolver(&data);
+    match patch_result {
         Ok((patched, report)) if report.patched_sites > 0 => {
-            let bak = format!("{}.bak", dll_path);
+            let bak = backup_path(Path::new(dll_path));
             if !Path::new(&bak).exists() {
                 fs::copy(path, &bak).map_err(|e| format!("Failed to backup resolver: {}", e))?;
             }
@@ -304,7 +406,7 @@ pub fn patch_unity_exe_validate_server_process(exe_path: &str) -> Result<String,
     }
 
     // 首次创建备份，之后每次从备份恢复确保干净状态
-    let bak = format!("{}.bak", exe_path);
+    let bak = backup_path(Path::new(exe_path));
     let bak_path = Path::new(&bak);
     if !bak_path.exists() {
         fs::copy(path, &bak).map_err(|e| e.to_string())?;
@@ -333,7 +435,7 @@ pub fn patch_unity_exe_validate_server_process(exe_path: &str) -> Result<String,
 
 /// Restore DLL from backup
 pub fn restore(dll_path: &str) -> Result<String, String> {
-    let bak_path = format!("{}.bak", dll_path);
+    let bak_path = backup_path(Path::new(dll_path));
     let bak = Path::new(&bak_path);
     if !bak.exists() {
         return Err("Backup not found".into());
@@ -343,12 +445,21 @@ pub fn restore(dll_path: &str) -> Result<String, String> {
 
     // 若曾补丁过 Unity.exe（2019.x），一并恢复
     if let Some(exe_path) = unity_exe_from_dll(dll_path) {
-        let exe_bak = format!("{}.bak", exe_path.display());
+        let exe_bak = backup_path(&exe_path);
         let exe_bak_path = Path::new(&exe_bak);
         if exe_bak_path.exists() {
             fs::copy(exe_bak_path, &exe_path).map_err(|e| format!("Failed to restore Unity.exe: {}", e))?;
             fs::remove_file(exe_bak_path).map_err(|e| e.to_string())?;
             eprintln!("✓ Restored Unity.exe");
+        }
+    }
+
+    // macOS：撤销 launcher shim，并重签 licensing client 所在的 app
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(dir) = Path::new(dll_path).parent() {
+            remove_r2r_env_shim(dir);
+            resign_editor_licensing_client(Path::new(dll_path));
         }
     }
 
@@ -370,16 +481,11 @@ pub fn restore(dll_path: &str) -> Result<String, String> {
 /// 三个补丁点独立检测，全命中 = "patched"，部分命中 = "partial"，全未命中 = "original"。
 fn hub_patch_state() -> String {
     let asar_path = hub_asar_path();
-    let resources_path = match asar_path.parent() {
-        Some(p) => p,
-        None => return "error".into(),
-    };
     if !asar_path.exists() {
         return "error".into();
     }
 
-    let hub_dir = resources_path.parent().unwrap_or(resources_path);
-    let licensing_dir = hub_dir.join("UnityLicensingClient_V1");
+    let licensing_dir = crate::scanner::hub_licensing_dir();
 
     let mut total = 0usize;
     let mut hits = 0usize;
@@ -427,7 +533,11 @@ fn asar_has_patch_marker(asar_path: &Path) -> bool {
 fn hub_resolver_patched(licensing_dir: &Path) -> bool {
     let resolver = licensing_dir.join("Unity.Licensing.EntitlementResolver.dll");
     if let Ok(data) = fs::read(&resolver) {
-        if let Ok((_, report)) = crate::il_patch::patch_resolver(&data) {
+        #[cfg(target_os = "macos")]
+        let probe = crate::il_patch::patch_resolver_keep_r2r(&data);
+        #[cfg(not(target_os = "macos"))]
+        let probe = crate::il_patch::patch_resolver(&data);
+        if let Ok((_, report)) = probe {
             if report.already_patched_sites > 0 {
                 return true;
             }
@@ -436,9 +546,7 @@ fn hub_resolver_patched(licensing_dir: &Path) -> bool {
             }
         }
     }
-    licensing_dir
-        .join("System.Security.Cryptography.Xml.dll.bak")
-        .exists()
+    backup_path(&licensing_dir.join("System.Security.Cryptography.Xml.dll")).exists()
 }
 
 /// Check Hub status: "patched" / "partial" / "original" / "error"
@@ -489,10 +597,10 @@ pub fn patch_hub(disable_signin: bool, disable_update: bool) -> Result<String, S
         if app_folder.exists() {
             fs::remove_dir_all(&app_folder).map_err(|e| format!("Failed to remove old app folder: {}", e))?;
         }
-        if let Some(hub_dir) = resources.parent() {
-            let licensing_dir = hub_dir.join("UnityLicensingClient_V1");
+        {
+            let licensing_dir = crate::scanner::hub_licensing_dir();
             let xml_dll = licensing_dir.join("System.Security.Cryptography.Xml.dll");
-            let xml_bak = licensing_dir.join("System.Security.Cryptography.Xml.dll.bak");
+            let xml_bak = backup_path(&licensing_dir.join("System.Security.Cryptography.Xml.dll"));
             if xml_bak.exists() {
                 if xml_dll.exists() {
                     fs::remove_file(&xml_dll).map_err(|e| format!("Failed to remove replaced XML DLL: {}", e))?;
@@ -506,7 +614,8 @@ pub fn patch_hub(disable_signin: bool, disable_update: bool) -> Result<String, S
     // 升级/重装 Hub 后安装器会把 asar 还原成原版，但旧 `.bak` 会残留：
     // 若拿陈旧备份去覆盖新安装的 asar，会把上一版本的 JS/文件清单塞进新版本 Hub。
     // 因此先核对备份所属的 Hub 版本，陈旧则丢弃重建。
-    let bak_str = format!("{}.bak", asar_path.display());
+    let bak = backup_path(&asar_path);
+    let bak_str = bak.to_string_lossy().to_string();
     let bak_path = Path::new(&bak_str);
     if bak_path.exists() && is_stale_hub_backup(bak_path, &asar_path) {
         eprintln!("⚠ app.asar.bak 属于旧版本 Hub（陈旧备份），丢弃并以当前安装为干净基线");
@@ -539,8 +648,7 @@ pub fn patch_hub(disable_signin: bool, disable_update: bool) -> Result<String, S
     // 否则只要 Hub client 与编辑器 client 版本相同（协议匹配），编辑器会优先使用
     // Hub 的（未补丁）client → "The digital signature is invalid." → 0 entitlement → 退出 198。
     // **无需额外启动独立 IPC 进程**：Hub 启动/重启时自动拉起其 client（补丁一次永久生效）。
-    let hub_dir = asar_path.parent().and_then(|p| p.parent()).unwrap_or_else(|| Path::new(""));
-    let resolver_note = match patch_hub_licensing_client(hub_dir) {
+    let resolver_note = match patch_hub_licensing_client() {
         Ok(n) => format!("; {}", n),
         Err(e) => format!("; ⚠ Hub licensing client resolver 未打补丁: {}", e),
     };
@@ -553,10 +661,102 @@ pub fn patch_hub(disable_signin: bool, disable_update: bool) -> Result<String, S
         eprintln!("✓ hubConfig.json updated");
     }
 
+    // macOS：改动 app.asar 与 Electron Framework 后原签名即失效；arm64 内核会拒绝
+    // 加载签名无效的 Mach-O，因此必须对整个 Hub.app 做 ad-hoc 重签（不需要开发者证书）。
+    #[cfg(target_os = "macos")]
+    {
+        resign_app_bundle(&crate::scanner::hub_install_dir(), "Unity Hub.app")?;
+        eprintln!("✓ Re-signed Unity Hub.app (ad-hoc)");
+    }
+
     Ok(format!(
         "Hub patched: {} JS files modified in-place in app.asar (asar kept intact);{}",
         patched_files, resolver_note
     ))
+}
+
+/// macOS：对 `.app` 做 ad-hoc 重签（`codesign --force --deep --sign -`），
+/// 并清除 quarantine 标记。改动包内任何文件后必须执行，否则签名校验会让 app 无法启动。
+#[cfg(target_os = "macos")]
+pub fn resign_app_bundle(app: &Path, label: &str) -> Result<(), String> {
+    let _ = std::process::Command::new("xattr")
+        .args(["-dr", "com.apple.quarantine"])
+        .arg(app)
+        .status();
+    let out = std::process::Command::new("codesign")
+        .args(["--force", "--deep", "--sign", "-"])
+        .arg(app)
+        .output()
+        .map_err(|e| format!("failed to run codesign: {}", e))?;
+    if !out.status.success() {
+        return Err(format!(
+            "codesign failed for {}: {}",
+            label,
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+/// macOS：把 licensing client 的可执行文件包一层 shell shim，注入
+/// `DOTNET_ReadyToRun=0`（原二进制改名 `*.real` 保留）。
+///
+/// 原因：resolver 是 ReadyToRun 镜像，运行时会执行 R2R 原生代码而忽略 IL 补丁；
+/// 而 .NET 宿主又不接受被清掉 `ManagedNativeHeader` 的镜像（直接报
+/// `FileNotFoundException: Could not load file or assembly ...`）。
+/// 用环境变量禁用 R2R 是唯一不改原生代码、且跨架构（arm64 / x86_64）通用的办法。
+///
+/// 返回是否新安装了 shim（已安装返回 false）。
+#[cfg(target_os = "macos")]
+pub fn ensure_r2r_env_shim(client_dir: &Path) -> Result<bool, String> {
+    let shim = client_dir.join("Unity.Licensing.Client");
+    let real = client_dir.join("Unity.Licensing.Client.real");
+    if real.exists() {
+        return Ok(false);
+    }
+    let data = fs::read(&shim).map_err(|e| format!("licensing client not found: {}", e))?;
+    // Mach-O magic（64 位小端 / universal）——已经是脚本说明装过了
+    let is_macho = data.starts_with(&[0xCF, 0xFA, 0xED, 0xFE]) || data.starts_with(&[0xCA, 0xFE, 0xBA, 0xBE]);
+    if !is_macho {
+        return Ok(false);
+    }
+    fs::rename(&shim, &real).map_err(|e| format!("Failed to rename licensing client: {}", e))?;
+    let script = "#!/bin/sh\n# patched by unifree: disable ReadyToRun so the IL patch in\n# Unity.Licensing.EntitlementResolver.dll takes effect\nexport DOTNET_ReadyToRun=0\nexec \"$(dirname \"$0\")/Unity.Licensing.Client.real\" \"$@\"\n";
+    fs::write(&shim, script).map_err(|e| format!("Failed to write launcher shim: {}", e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&shim, fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("Failed to chmod launcher shim: {}", e))?;
+    }
+    Ok(true)
+}
+
+/// 撤销 launcher shim（还原原始 licensing client 可执行文件）。
+#[cfg(target_os = "macos")]
+pub fn remove_r2r_env_shim(client_dir: &Path) {
+    let shim = client_dir.join("Unity.Licensing.Client");
+    let real = client_dir.join("Unity.Licensing.Client.real");
+    if real.exists() {
+        let _ = fs::remove_file(&shim);
+        let _ = fs::rename(&real, &shim);
+    }
+}
+
+/// macOS：补丁编辑器内置 licensing client 的 DLL 后，重签它所在的
+/// `UnityLicensingClient.app`（资源封印失效会让签名校验失败）。
+#[cfg(target_os = "macos")]
+fn resign_editor_licensing_client(target: &Path) {
+    let mut current = target.parent();
+    while let Some(p) = current {
+        if p.extension().map(|e| e == "app").unwrap_or(false) {
+            if let Err(e) = resign_app_bundle(p, "UnityLicensingClient.app") {
+                eprintln!("⚠ macOS: failed to re-sign {}: {}", p.display(), e);
+            }
+            return;
+        }
+        current = p.parent();
+    }
 }
 
 /// 补丁 Hub 自带 licensing client 的 `Unity.Licensing.EntitlementResolver.dll`：
@@ -564,8 +764,8 @@ pub fn patch_hub(disable_signin: bool, disable_update: bool) -> Result<String, S
 /// 未来新线都能命中，只要 ValidateSignature 的 IL 结构未改型）；命不中时按 LocalIPC
 /// 发行线回退到预编译补丁 DLL（1.17.x = Hub 3.20.0 时代 / 1.18+ = Hub 3.21.1 起）。
 /// 备份为 `<dll>.bak`；已补丁（内容一致）时跳过。需要管理员权限（Program Files）。
-fn patch_hub_licensing_client(hub_dir: &Path) -> Result<String, String> {
-    let licensing_dir = hub_dir.join("UnityLicensingClient_V1");
+fn patch_hub_licensing_client() -> Result<String, String> {
+    let licensing_dir = crate::scanner::hub_licensing_dir();
     let resolver = licensing_dir.join("Unity.Licensing.EntitlementResolver.dll");
     if !resolver.exists() {
         return Err(format!("not found: {}", resolver.display()));
@@ -574,24 +774,32 @@ fn patch_hub_licensing_client(hub_dir: &Path) -> Result<String, String> {
 
     // 就地 IL 补丁（首选，与 LocalIPC 线无关）
     let data = fs::read(&resolver).map_err(|e| format!("Failed to read hub resolver: {}", e))?;
-    match crate::il_patch::patch_resolver(&data) {
+    #[cfg(target_os = "macos")]
+    let patch_result = crate::il_patch::patch_resolver_keep_r2r(&data);
+    #[cfg(not(target_os = "macos"))]
+    let patch_result = crate::il_patch::patch_resolver(&data);
+    match patch_result {
         Ok((patched, report)) => {
             // 只结束 Hub 目录下的 licensing client（另一个进程会随后重新拉起并加载补丁后的 DLL）；
             // 不碰编辑器自己的 client（1.18+ 编辑器走独立目录/独立进程/版本化管道，互不影响）
             kill_hub_licensing_clients(&licensing_dir);
             if report.patched_sites > 0 {
-                let bak = licensing_dir.join("Unity.Licensing.EntitlementResolver.dll.bak");
+                let bak = backup_path(&licensing_dir.join("Unity.Licensing.EntitlementResolver.dll"));
                 if !bak.exists() {
                     fs::copy(&resolver, &bak)
                         .map_err(|e| format!("Failed to backup hub resolver: {}", e))?;
                 }
                 fs::write(&resolver, &patched)
                     .map_err(|e| format!("Failed to write patched hub resolver: {}", e))?;
+                #[cfg(target_os = "macos")]
+                let _ = ensure_r2r_env_shim(&licensing_dir);
                 Ok(format!(
                     "hub licensing client resolver patched in-place (LocalIPC v{}, {} site(s)); editors launched from Hub now bypass ULF signature check",
                     ver, report.patched_sites
                 ))
             } else {
+                #[cfg(target_os = "macos")]
+                let _ = ensure_r2r_env_shim(&licensing_dir);
                 Ok(format!(
                     "hub licensing client resolver already patched in-place (LocalIPC v{}, {} site(s) detected)",
                     ver, report.already_patched_sites
@@ -632,7 +840,7 @@ fn patch_hub_licensing_client(hub_dir: &Path) -> Result<String, String> {
             }
 
             // 备份 + 替换
-            let bak = licensing_dir.join("Unity.Licensing.EntitlementResolver.dll.bak");
+            let bak = backup_path(&licensing_dir.join("Unity.Licensing.EntitlementResolver.dll"));
             if !bak.exists() {
                 fs::copy(&resolver, &bak)
                     .map_err(|e| format!("Failed to backup hub resolver: {}", e))?;
@@ -648,15 +856,31 @@ fn patch_hub_licensing_client(hub_dir: &Path) -> Result<String, String> {
 }
 
 /// 根据 app.asar 路径推导 Hub 可执行文件路径（fuse 存在 exe 里）
+/// fuse 所在的可执行文件：
+/// - Windows：`<Hub>/Unity Hub.exe`
+/// - macOS：Electron fuses 嵌在 `Electron Framework` 里，不在 `Contents/MacOS/Unity Hub`
 fn hub_exe_path(asar_path: &Path) -> Option<PathBuf> {
-    let resources = asar_path.parent()?;
-    let hub_dir = resources.parent()?;
     #[cfg(target_os = "windows")]
-    { Some(hub_dir.join("Unity Hub.exe")) }
+    {
+        let hub_dir = asar_path.parent()?.parent()?;
+        Some(hub_dir.join("Unity Hub.exe"))
+    }
     #[cfg(target_os = "macos")]
-    { Some(hub_dir.join("Unity Hub.app").join("Contents").join("MacOS").join("Unity Hub")) }
+    {
+        let _ = asar_path;
+        Some(
+            crate::scanner::hub_install_dir()
+                .join("Contents")
+                .join("Frameworks")
+                .join("Electron Framework.framework")
+                .join("Electron Framework"),
+        )
+    }
     #[cfg(target_os = "linux")]
-    { Some(hub_dir.join("unityhub")) }
+    {
+        let hub_dir = asar_path.parent()?.parent()?;
+        Some(hub_dir.join("unityhub"))
+    }
 }
 
 const HUB_FUSE_MAGIC: &[u8] = b"dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX";
@@ -711,7 +935,7 @@ fn flip_hub_exe_fuses(exe_path: &Path) -> Result<bool, String> {
     }
 
     // 翻转前备份 exe（旧版本残留的 `<exe>.bak` 会被换成本次安装的原版，避免恢复时写回旧 exe）
-    let bak = format!("{}.bak", exe_path.display());
+    let bak = backup_path(exe_path);
     let bak_path = Path::new(&bak);
     let stale_bak = bak_path.exists() && !same_installed_version(exe_path, bak_path);
     if !bak_path.exists() || stale_bak {
@@ -792,7 +1016,15 @@ fn kill_hub_licensing_clients(licensing_dir: &Path) {
             .creation_flags(0x08000000)
             .output();
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        // 只结束 Hub 自带 client（路径过滤），保留编辑器自己的 client 进程
+        let _ = std::process::Command::new("pkill")
+            .arg("-f")
+            .arg(licensing_dir.join("Unity.Licensing.Client").to_string_lossy().as_ref())
+            .output();
+    }
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
     {
         let _ = licensing_dir;
         kill_process("Unity.Licensing.Client").ok();
@@ -1017,7 +1249,7 @@ pub fn restore_hub() -> Result<String, String> {
     let asar_path = hub_asar_path();
     let resources_path = asar_path.parent().ok_or("Cannot get resources path")?;
     let app_folder = resources_path.join("app");
-    let asar_bak = resources_path.join("app.asar.bak");
+    let asar_bak = backup_path(&asar_path);
 
     // 删除提取的 app 目录
     if app_folder.exists() {
@@ -1033,10 +1265,9 @@ pub fn restore_hub() -> Result<String, String> {
     }
 
     // 恢复 Hub XML DLL
-    let hub_dir = resources_path.parent().ok_or("Cannot get Hub directory")?;
-    let licensing_dir = hub_dir.join("UnityLicensingClient_V1");
+    let licensing_dir = crate::scanner::hub_licensing_dir();
     let xml_dll_path = licensing_dir.join("System.Security.Cryptography.Xml.dll");
-    let xml_dll_bak = licensing_dir.join("System.Security.Cryptography.Xml.dll.bak");
+    let xml_dll_bak = backup_path(&licensing_dir.join("System.Security.Cryptography.Xml.dll"));
 
     if xml_dll_bak.exists() {
         if xml_dll_path.exists() {
@@ -1048,7 +1279,7 @@ pub fn restore_hub() -> Result<String, String> {
 
     // 恢复 Hub licensing client 的 EntitlementResolver（若被补丁过）
     let hub_resolver = licensing_dir.join("Unity.Licensing.EntitlementResolver.dll");
-    let hub_resolver_bak = licensing_dir.join("Unity.Licensing.EntitlementResolver.dll.bak");
+    let hub_resolver_bak = backup_path(&hub_resolver);
     if hub_resolver_bak.exists() {
         if hub_resolver.exists() {
             fs::remove_file(&hub_resolver).map_err(|e| format!("Failed to remove patched hub resolver: {}", e))?;
@@ -1060,7 +1291,7 @@ pub fn restore_hub() -> Result<String, String> {
 
     // 恢复 Licensing Client（如果被禁用）
     let licensing_client_exe = licensing_dir.join("Unity.Licensing.Client.exe");
-    let licensing_client_bak = licensing_dir.join("Unity.Licensing.Client.exe.bak");
+    let licensing_client_bak = backup_path(&licensing_client_exe);
 
     if !licensing_client_exe.exists() && licensing_client_bak.exists() {
         fs::rename(&licensing_client_bak, &licensing_client_exe).map_err(|e| format!("Failed to restore Licensing Client: {}", e))?;
@@ -1069,14 +1300,30 @@ pub fn restore_hub() -> Result<String, String> {
 
     // 恢复 Hub exe（撤销 fuse 翻转）
     if let Some(hub_exe) = hub_exe_path(&asar_path) {
-        let exe_bak = hub_exe.with_extension("exe.bak");
+        let exe_bak = backup_path(&hub_exe);
         if exe_bak.exists() {
-            if hub_exe.exists() {
-                fs::remove_file(&hub_exe).map_err(|e| format!("Failed to remove patched exe: {}", e))?;
-            }
-            fs::rename(&exe_bak, &hub_exe).map_err(|e| format!("Failed to restore exe: {}", e))?;
+            // macOS 上 hub_exe 是 framework 里的符号链接：必须"写穿"到目标文件，
+            // 先删后改名会把符号链接换成真实文件，破坏 framework 结构（codesign 报
+            // "bundle format is ambiguous"）。copy 对两种结构都安全。
+            fs::copy(&exe_bak, &hub_exe).map_err(|e| format!("Failed to restore exe: {}", e))?;
+            fs::remove_file(&exe_bak).map_err(|e| format!("Failed to remove backup exe: {}", e))?;
             eprintln!("✓ Restored Hub exe");
         }
+    }
+
+    // macOS 上 licensing client 的可执行文件没有 .exe 后缀
+    #[cfg(target_os = "macos")]
+    {
+        remove_r2r_env_shim(&licensing_dir);
+        let client = licensing_dir.join("Unity.Licensing.Client");
+        let client_bak = backup_path(&licensing_dir.join("Unity.Licensing.Client"));
+        if !client.exists() && client_bak.exists() {
+            fs::rename(&client_bak, &client).map_err(|e| format!("Failed to restore Licensing Client: {}", e))?;
+            eprintln!("✓ Restored Licensing Client");
+        }
+        // 恢复原文件后签名仍是补丁期间的 ad-hoc 签名，重新签一次保证可启动
+        resign_app_bundle(&crate::scanner::hub_install_dir(), "Unity Hub.app")?;
+        eprintln!("✓ Re-signed Unity Hub.app (ad-hoc)");
     }
 
     Ok("Restored: app.asar, XML DLL, Licensing Client, Hub exe".into())
