@@ -1,3 +1,57 @@
+# macOS：AOT licensing client 补丁（最终方案，已实测）
+
+适用：Unity 6000.3.28f1（macOS arm64，`Unity.Licensing.Client` 为 Native AOT 单二进制）。
+结论先行：两处补丁 + 一次 ad-hoc 重签即可让编辑器拿到 Pro 授权。
+
+## 1. 客户端：短路 `ValidateSignature`
+
+- 目标：`XmlExtensions.ValidateSignature` 等价函数（`XmlReader<T>.Read + 0xd8` 调用它，
+  两者都在异常 traceback 里出现：`ValidateSignature + 0x590` / `Read + 0xdc`）。
+- 定位：函数入口 24 字节在整文件唯一：
+
+```
+f6 57 bd a9 f4 4f 01 a9 fd 7b 02 a9 fd 83 00 91 f3 03 01 aa 73 03 00 b4
+```
+
+- 补丁：入口 8 字节 → `20 00 80 52 C0 03 5F D6`（`mov w0,#1; ret`）。
+- 效果：ULF 与 entitlement XML 的签名校验同时通过（日志 `Successfully parsed (ULF) license`）。
+
+## 2. 编辑器：绕过 Licensing Client 的代码签名校验
+
+客户端被改后原签名失效，编辑器会报
+`Code 8 while verifying Licensing Client signature` 并拒绝该 client。
+定位方式：
+
+1. ASCII 格式串 `Code {0} while verifying Licensing Client signature (process Id: {1}, path: "{2}")`；
+2. Mach-O 段表把文件偏移换算成 VA（`__cstring` 在 `__TEXT` 内，fileoff=0 时 VA = 0x100000000 + off）；
+3. 扫 `adrp/add` 找到引用点（6000.3.28f1 为 `0x102862258`）；
+4. 判定在引用点**之前**：`cmp w0,#9`（成功码 9）紧跟 `b.ne`（`0x54000061`），改成 `nop`（`0xD503201F`）。
+
+## 3. 重签
+
+两处都改完后对整个 `Unity.app` 做一次 `codesign --force --deep --sign -`。
+分步重签会留下不一致的封印（实测 `codesign --verify --deep --strict` 报
+`invalid signature (code or signature have been modified)`），必须最后统一签一次。
+
+## 实测结果（Unity 6000.3.28f1 / macOS arm64）
+
+| 指标 | 补丁前 | 补丁后 |
+|------|--------|--------|
+| `Unity -batchmode -quit -createProject` 退出码 | 198 | **0** |
+| 客户端日志 | `The digital signature is invalid.` | `Successfully parsed (ULF) license` |
+| 编辑器日志 | `Code 8 ... failed validation` | `License group: Product: Unity Pro` |
+| 工程创建 | 失败 | `Assets/ Library/ ProjectSettings/ ...` 正常生成 |
+
+## 工具实现
+
+- `patcher::patch_macos_aot_client` / `restore_macos_aot_client`（锚点匹配 + 包外备份）
+- `patcher::patch_macos_editor_client_signature_check` / `restore_macos_editor`（字符串 xref + `b.ne → nop`）
+- `patcher::patch_entitlement_resolver`：macOS 上识别 `Unity.Licensing.Client`（AOT）走上述流程，
+  托管 client（6000.3.21-27）仍走 IL 就地补丁 + `DOTNET_ReadyToRun=0` 启动器
+- 还原：AOT 分支放在通用 `.bak` 逻辑之前，避免备份被提前消费
+
+---
+
 # macOS 编辑器侧：Licensing Client 代码签名校验（RE 记录）
 
 macOS 上 Unity 编辑器在启动 Licensing Client 之后，会先验证 **cl Licensing Client 可执行文件本身的
