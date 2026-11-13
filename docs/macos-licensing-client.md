@@ -150,6 +150,27 @@ __attribute__((used)) static const interpose_t interposers[]
 结论：做动态分析前，必须先把 `UnityLicensingClient.app` 重新 ad-hoc 签名（`codesign --force --deep
 --sign -`），并在同一次实验里完成注入；还原原始二进制后注入会静默失效，容易误判为“函数没被调用”。
 
+### 本轮新发现：SecKeyVerifySignature 与第二条调用路径
+
+1. 客户端跑 ULF/entitlement 解析时，stderr 会打出 Security.framework 的
+   `SecKeyVerifySignature failed: ... RSA signature verification failed, no match`，
+   说明验签最终落到 `SecKeyVerifySignature`。
+   - 符号位置：`otool -Iv` → `__stubs` 条目 `0x100a83e40`、`__got` 槽 `0x101118340`；
+   - 把 `0x100a83e40` 存根改成 `mov w0,#1; ret`（`20 00 80 52 C0 03 5F D6`）并重签后，
+     stderr 里的 `SecKeyVerifySignature failed` 消失（存根生效），但 ULF 仍然报
+     `The digital signature is invalid.`，且调用点 `0x100032e28 / 0x100032ecc`（AppleCrypto
+     原生 helper 内）根本没有被命中。
+   - 结论：**ULF 在验签之前就先在摘要/结构比较上失败了**，单纯伪造 RSA 验签结果不够。
+2. 编辑/伪造 entitlement 文件同样不可行：把 `~/Library/Unity/licenses/UnityEntitlementLicense.xml`
+   里的 `ebgamedeMini` 改成当前主机名后，客户端立刻报签名无效——这个文件也有签名校验，
+   走的还是同一个 `ValidateSignature`（调用链
+   `UnityLicense..ctor + 0xf0 → UnityLicense.ReadAndParseLicense + 0x6c → XmlReader.Read → ValidateSignature`）。
+   该 XML 原本能解析成功，只是 `ContextValidator` 因主机名/域不一致而拒绝授权。
+3. 因此唯一可行点依旧是 `XmlExtensions.ValidateSignature` 本体（两个入口都汇到它）。
+   新增的非泛型调用链线索（`UnityLicense..ctor +0xf0 → ReadAndParseLicense +0x6c`）比泛型
+   `XmlReader<T>.Read` 更可靠，但按 `+0xf0/+0x6c` 偏移反查仍会撞出上千个误报，
+   需要配合“函数大小 / 是否调用 crypto”等额外约束。
+
 ### 下一步（已收敛）
 
 优先级 1：**从运行时异常对象里取 IP**。客户端抛异常时会捕获托管栈（所以日志能打印方法名+偏移），
